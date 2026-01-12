@@ -5,11 +5,7 @@ import com.example.Authentication_System.Domain.model.Role;
 import com.example.Authentication_System.Domain.model.Session;
 import com.example.Authentication_System.Domain.model.Permission;
 import com.example.Authentication_System.Domain.model.AuditLog;
-import com.example.Authentication_System.Infrastructure.Persistence.Entity.UserEntity;
-import com.example.Authentication_System.Infrastructure.Persistence.Entity.RoleEntity;
-import com.example.Authentication_System.Infrastructure.Persistence.Entity.SessionEntity;
-import com.example.Authentication_System.Infrastructure.Persistence.Entity.PermissionEntity;
-import com.example.Authentication_System.Infrastructure.Persistence.Entity.AuditLogEntity;
+import com.example.Authentication_System.Infrastructure.Persistence.Entity.*;
 
 import java.time.LocalDateTime;
 import java.time.ZoneId;

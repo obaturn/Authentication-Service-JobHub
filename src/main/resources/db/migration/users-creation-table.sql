@@ -1,10 +1,20 @@
 CREATE TABLE users (
     id UUID PRIMARY KEY,
-    full_name VARCHAR(255) NOT NULL,
+    first_name VARCHAR(255) NOT NULL,
+    last_name VARCHAR(255) NOT NULL,
     email VARCHAR(255) NOT NULL UNIQUE,
-    password VARCHAR(255) NOT NULL,
-    role VARCHAR(50) NOT NULL,
-    is_active BOOLEAN DEFAULT TRUE,
+    password_hash VARCHAR(255) NOT NULL,
+    user_type VARCHAR(50) NOT NULL DEFAULT 'job_seeker',
+    status VARCHAR(50) NOT NULL DEFAULT 'active',
+    email_verified BOOLEAN DEFAULT FALSE,
+    mfa_enabled BOOLEAN DEFAULT FALSE,
+    mfa_secret VARCHAR(255),
+    google_id VARCHAR(255),
+    avatar_url VARCHAR(500),
+    phone VARCHAR(20),
+    location VARCHAR(255),
+    bio TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_login_at TIMESTAMP
 );

@@ -19,24 +19,54 @@ public class UserEntity {
     @GenericGenerator(name = "uuid2", strategy = "org.hibernate.id.UUIDGenerator")
     private UUID id;
 
-    @Column(nullable = false, name = "full_name")
-    private String fullName;
-
     @Column(nullable = false, unique = true)
     private String email;
 
     @Column(nullable = false)
-    private String password;
+    private String passwordHash;
 
     @Column(nullable = false)
-    private String role;
+    private String firstName;
 
-    @Column(name = "is_active")
-    private boolean isActive;
+    @Column(nullable = false)
+    private String lastName;
+
+    @Column(nullable = false)
+    private String userType;
+
+    @Column(nullable = false)
+    private String status;
+
+    @Column(name = "email_verified")
+    private boolean emailVerified;
+
+    @Column(name = "mfa_enabled")
+    private boolean mfaEnabled;
+
+    @Column(name = "mfa_secret")
+    private String mfaSecret;
+
+    @Column(name = "google_id")
+    private String googleId;
+
+    @Column(name = "avatar_url")
+    private String avatarUrl;
+
+    @Column
+    private String phone;
+
+    @Column
+    private String location;
+
+    @Column
+    private String bio;
 
     @Column(name = "created_at")
     private LocalDateTime createdAt;
 
     @Column(name = "updated_at")
     private LocalDateTime updatedAt;
+
+    @Column(name = "last_login_at")
+    private LocalDateTime lastLoginAt;
 }

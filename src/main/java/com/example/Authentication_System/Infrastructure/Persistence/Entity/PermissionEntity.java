@@ -12,40 +12,26 @@ import java.util.UUID;
 @NoArgsConstructor
 @AllArgsConstructor
 @Entity
-@Table(name = "audit_logs")
-public class AuditLogEntity {
+@Table(name = "permissions")
+public class PermissionEntity {
 
     @Id
     @GeneratedValue(generator = "uuid2")
     @GenericGenerator(name = "uuid2", strategy = "org.hibernate.id.UUIDGenerator")
     private UUID id;
 
-    @Column(name = "user_id")
-    private UUID userId;
+    @Column(nullable = false, unique = true)
+    private String name;
 
-    @Column(nullable = false)
-    private String action;
+    @Column
+    private String description;
 
     @Column
     private String resource;
 
-    @Column(name = "resource_id")
-    private UUID resourceId;
-
-    @Column(columnDefinition = "TEXT")
-    private String details;
-
-    @Column(name = "ip_address")
-    private String ipAddress;
-
-    @Column(name = "user_agent")
-    private String userAgent;
+    @Column
+    private String action;
 
     @Column(name = "created_at")
     private LocalDateTime createdAt;
-
-    @PrePersist
-    protected void onCreate() {
-        createdAt = LocalDateTime.now();
-    }
 }
