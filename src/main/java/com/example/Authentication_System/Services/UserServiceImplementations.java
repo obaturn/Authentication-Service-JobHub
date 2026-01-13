@@ -1,38 +1,72 @@
 package com.example.Authentication_System.Services;
 
 import com.example.Authentication_System.Domain.model.AuthResponse;
+import com.example.Authentication_System.Domain.model.ProfileUpdateRequest;
 import com.example.Authentication_System.Domain.model.RefreshToken;
 import com.example.Authentication_System.Domain.model.User;
+import com.example.Authentication_System.Domain.model.Role;
+import com.example.Authentication_System.Domain.model.UserRole;
 import com.example.Authentication_System.Domain.repository.OutPutRepositoryPort.UserUseCase;
 import com.example.Authentication_System.Domain.repository.inputRepositoryPort.RefreshTokenRepository;
 import com.example.Authentication_System.Domain.repository.inputRepositoryPort.UserRepository;
+import com.example.Authentication_System.Domain.repository.inputRepositoryPort.RoleRepository;
+import com.example.Authentication_System.Domain.repository.inputRepositoryPort.UserRoleRepository;
 import com.example.Authentication_System.Security.JwtUtils;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.List;
 
 @Service
 public class UserServiceImplementations implements UserUseCase {
     private final UserRepository userRepository;
     private final RefreshTokenRepository refreshTokenRepository;
+    private final RoleRepository roleRepository;
+    private final UserRoleRepository userRoleRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtUtils jwtUtils;
+    private final AuditService auditService;
 
     public UserServiceImplementations(UserRepository userRepository,
-                                    RefreshTokenRepository refreshTokenRepository,
-                                    PasswordEncoder passwordEncoder,
-                                    JwtUtils jwtUtils) {
+                                      RefreshTokenRepository refreshTokenRepository,
+                                      RoleRepository roleRepository,
+                                      UserRoleRepository userRoleRepository,
+                                      PasswordEncoder passwordEncoder,
+                                      JwtUtils jwtUtils,
+                                      AuditService auditService) {
         this.userRepository = userRepository;
         this.refreshTokenRepository = refreshTokenRepository;
+        this.roleRepository = roleRepository;
+        this.userRoleRepository = userRoleRepository;
         this.passwordEncoder = passwordEncoder;
         this.jwtUtils = jwtUtils;
+        this.auditService = auditService;
+    }
+
+    private String hashRefreshToken(String token) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest(token.getBytes(StandardCharsets.UTF_8));
+            StringBuilder hexString = new StringBuilder();
+            for (byte b : hash) {
+                String hex = Integer.toHexString(0xff & b);
+                if (hex.length() == 1) hexString.append('0');
+                hexString.append(hex);
+            }
+            return hexString.toString();
+        } catch (NoSuchAlgorithmException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     @Override
-    public User register(User user) {
+    public User register(User user, String ipAddress, String userAgent) {
         Optional<User> existing = userRepository.findByEmail(user.getEmail());
         if (existing.isPresent()) {
             throw new IllegalArgumentException("Email already in use");
@@ -65,22 +99,52 @@ public class UserServiceImplementations implements UserUseCase {
                 .lastLoginAt(null)
                 .build();
 
-        return userRepository.save(newUser);
+        User savedUser = userRepository.save(newUser);
+
+        // Assign default "job_seeker" role to new user
+        Optional<Role> jobSeekerRoleOpt = roleRepository.findByName("job_seeker");
+        if (jobSeekerRoleOpt.isPresent()) {
+            Role jobSeekerRole = jobSeekerRoleOpt.get();
+            UserRole userRole = UserRole.builder()
+                    .id(UUID.randomUUID())
+                    .userId(savedUser.getId())
+                    .roleId(jobSeekerRole.getId())
+                    .assignedAt(Instant.now())
+                    .assignedBy(savedUser.getId()) // Self-assigned during registration
+                    .build();
+            userRoleRepository.save(userRole);
+        }
+
+        // Audit log for user registration
+        auditService.logEvent(savedUser.getId(), "REGISTER", "User", savedUser.getId(), "User registered successfully", ipAddress, userAgent);
+
+        return savedUser;
 
     }
 
     @Override
-    public Optional<AuthResponse> login(String email, String password) {
+    public Optional<AuthResponse> login(String email, String password, String ipAddress, String userAgent) {
         Optional<User> userOpt = userRepository.findByEmail(email);
 
         if (userOpt.isEmpty()) {
+            // Audit log for login failure - user not found
+            auditService.logEvent(null, "LOGIN_FAILED", "User", null, "Login failed: user not found for email " + email, ipAddress, userAgent);
             return Optional.empty();
         }
 
         User user = userOpt.get();
 
+        // Check user status - only allow active users to login
+        if (!"active".equals(user.getStatus())) {
+            // Audit log for login failure - account not active
+            auditService.logEvent(user.getId(), "LOGIN_FAILED", "User", user.getId(), "Login failed: account status is " + user.getStatus(), ipAddress, userAgent);
+            return Optional.empty();
+        }
+
         boolean matches = passwordEncoder.matches(password, user.getPasswordHash());
         if (!matches) {
+            // Audit log for login failure - invalid password
+            auditService.logEvent(user.getId(), "LOGIN_FAILED", "User", user.getId(), "Login failed: invalid password", ipAddress, userAgent);
             return Optional.empty();
         }
 
@@ -100,28 +164,15 @@ public class UserServiceImplementations implements UserUseCase {
         refreshTokenRepository.save(refreshToken);
 
         // Update last login
-        User updatedUser = User.builder()
-                .id(user.getId())
-                .firstName(user.getFirstName())
-                .lastName(user.getLastName())
-                .email(user.getEmail())
-                .passwordHash(user.getPasswordHash())
-                .userType(user.getUserType())
-                .status(user.getStatus())
-                .emailVerified(user.isEmailVerified())
-                .mfaEnabled(user.isMfaEnabled())
-                .mfaSecret(user.getMfaSecret())
-                .googleId(user.getGoogleId())
-                .avatarUrl(user.getAvatarUrl())
-                .phone(user.getPhone())
-                .location(user.getLocation())
-                .bio(user.getBio())
-                .createdAt(user.getCreatedAt())
-                .updatedAt(Instant.now())
+        User updatedUser = user.toBuilder()
                 .lastLoginAt(Instant.now())
+                .updatedAt(Instant.now())
                 .build();
 
         userRepository.save(updatedUser);
+
+        // Audit log for successful login
+        auditService.logEvent(user.getId(), "LOGIN_SUCCESS", "User", user.getId(), "User logged in successfully", ipAddress, userAgent);
 
         AuthResponse authResponse = AuthResponse.builder()
                 .accessToken(accessToken)
@@ -145,8 +196,8 @@ public class UserServiceImplementations implements UserUseCase {
     }
 
     @Override
-    public void updateProfile(User user) {
-        Optional<User> existingOpt = userRepository.findById(user.getId());
+    public void updateProfile(UUID userId, ProfileUpdateRequest request, String ipAddress, String userAgent) {
+        Optional<User> existingOpt = userRepository.findById(userId);
 
         if (existingOpt.isEmpty()) {
             throw new IllegalArgumentException("User not found");
@@ -154,50 +205,59 @@ public class UserServiceImplementations implements UserUseCase {
 
         User existing = existingOpt.get();
 
-        User saved = User.builder()
-                .id(existing.getId())
-                .firstName(user.getFirstName() != null ? user.getFirstName() : existing.getFirstName())
-                .lastName(user.getLastName() != null ? user.getLastName() : existing.getLastName())
-                .email(existing.getEmail())
-                .passwordHash(existing.getPasswordHash())
-                .userType(existing.getUserType())
-                .status(existing.getStatus())
-                .emailVerified(existing.isEmailVerified())
-                .mfaEnabled(existing.isMfaEnabled())
-                .mfaSecret(existing.getMfaSecret())
-                .googleId(existing.getGoogleId())
-                .avatarUrl(existing.getAvatarUrl())
-                .phone(user.getPhone() != null ? user.getPhone() : existing.getPhone())
-                .location(user.getLocation() != null ? user.getLocation() : existing.getLocation())
-                .bio(user.getBio() != null ? user.getBio() : existing.getBio())
-                .createdAt(existing.getCreatedAt())
+        User saved = existing.toBuilder()
+                .firstName(request.getFirstName() != null ? request.getFirstName() : existing.getFirstName())
+                .lastName(request.getLastName() != null ? request.getLastName() : existing.getLastName())
+                .avatarUrl(request.getAvatarUrl() != null ? request.getAvatarUrl() : existing.getAvatarUrl())
+                .phone(request.getPhone() != null ? request.getPhone() : existing.getPhone())
+                .location(request.getLocation() != null ? request.getLocation() : existing.getLocation())
+                .bio(request.getBio() != null ? request.getBio() : existing.getBio())
                 .updatedAt(Instant.now())
-                .lastLoginAt(existing.getLastLoginAt())
                 .build();
 
         userRepository.save(saved);
+
+        // Audit log for profile update
+        auditService.logEvent(saved.getId(), "PROFILE_UPDATE", "User", saved.getId(), "User profile updated", ipAddress, userAgent);
     }
 
     @Override
-    public AuthResponse refreshToken(String refreshTokenValue) {
-        // Find refresh token by hash
-        Optional<RefreshToken> refreshTokenOpt = refreshTokenRepository.findByTokenHash(
-            passwordEncoder.encode(refreshTokenValue)
-        );
+    public AuthResponse refreshToken(String refreshTokenValue, String ipAddress, String userAgent) {
+        // 1. Get all active refresh tokens for the user (we need to find the user first)
+        // Since we only have the raw token, we can't query by hash directly because of the salt.
+        // We need to decode the token to get the userId first.
+        
+        String userIdStr = jwtUtils.getUserIdFromToken(refreshTokenValue);
+        if (userIdStr == null) {
+             throw new IllegalArgumentException("Invalid refresh token structure");
+        }
+        
+        UUID userId = UUID.fromString(userIdStr);
+        
+        // 2. Fetch all valid tokens for this user from DB
+        List<RefreshToken> userTokens = refreshTokenRepository.findAllByUserIdAndRevokedAtIsNull(userId);
+        
+        RefreshToken matchedToken = null;
+        
+        // 3. Iterate and check matches
+        for (RefreshToken token : userTokens) {
+            if (passwordEncoder.matches(refreshTokenValue, token.getTokenHash())) {
+                matchedToken = token;
+                break;
+            }
+        }
 
-        if (refreshTokenOpt.isEmpty()) {
+        if (matchedToken == null) {
             throw new IllegalArgumentException("Invalid refresh token");
         }
 
-        RefreshToken refreshToken = refreshTokenOpt.get();
-
-        // Check if token is expired or revoked
-        if (refreshToken.getExpiresAt().isBefore(Instant.now()) || refreshToken.getRevokedAt() != null) {
-            throw new IllegalArgumentException("Refresh token expired or revoked");
+        // Check if token is expired
+        if (matchedToken.getExpiresAt().isBefore(Instant.now())) {
+            throw new IllegalArgumentException("Refresh token expired");
         }
 
         // Get user
-        Optional<User> userOpt = userRepository.findById(refreshToken.getUserId());
+        Optional<User> userOpt = userRepository.findById(matchedToken.getUserId());
         if (userOpt.isEmpty()) {
             throw new IllegalArgumentException("User not found");
         }
@@ -205,7 +265,7 @@ public class UserServiceImplementations implements UserUseCase {
         User user = userOpt.get();
 
         // Revoke old refresh token
-        refreshTokenRepository.revokeToken(passwordEncoder.encode(refreshTokenValue));
+        refreshTokenRepository.revokeToken(matchedToken.getTokenHash());
 
         // Generate new tokens
         String newAccessToken = jwtUtils.generateAccessToken(user);
@@ -222,6 +282,9 @@ public class UserServiceImplementations implements UserUseCase {
 
         refreshTokenRepository.save(newRefreshToken);
 
+        // Audit log for token refresh
+        auditService.logEvent(user.getId(), "TOKEN_REFRESH", "RefreshToken", newRefreshToken.getId(), "Refresh token generated successfully", ipAddress, userAgent);
+
         return AuthResponse.builder()
                 .accessToken(newAccessToken)
                 .refreshToken(newRefreshTokenValue)
@@ -231,5 +294,42 @@ public class UserServiceImplementations implements UserUseCase {
                 .build();
     }
 
-}
+    @Override
+    public void logout(UUID userId, String ipAddress, String userAgent) {
+        // Revoke all refresh tokens for the user
+        refreshTokenRepository.revokeAllTokensForUser(userId);
 
+        // Audit log for logout
+        auditService.logEvent(userId, "LOGOUT", "User", userId, "User logged out successfully", ipAddress, userAgent);
+    }
+
+    @Override
+    public Optional<User> getProfile(UUID userId) {
+        return userRepository.findById(userId);
+    }
+
+    @Override
+    public void deactivateAccount(UUID userId, String ipAddress, String userAgent) {
+        Optional<User> existingOpt = userRepository.findById(userId);
+
+        if (existingOpt.isEmpty()) {
+            throw new IllegalArgumentException("User not found");
+        }
+
+        User existing = existingOpt.get();
+
+        User updated = existing.toBuilder()
+                .status("inactive")
+                .updatedAt(Instant.now())
+                .build();
+
+        userRepository.save(updated);
+
+        // Revoke all refresh tokens for the user
+        refreshTokenRepository.revokeAllTokensForUser(userId);
+
+        // Audit log for account deactivation
+        auditService.logEvent(userId, "ACCOUNT_DEACTIVATION", "User", userId, "User account deactivated", ipAddress, userAgent);
+    }
+
+}

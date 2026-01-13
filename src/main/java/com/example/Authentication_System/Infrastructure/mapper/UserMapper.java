@@ -2,6 +2,7 @@ package com.example.Authentication_System.Infrastructure.mapper;
 
 import com.example.Authentication_System.Domain.model.User;
 import com.example.Authentication_System.Domain.model.Role;
+import com.example.Authentication_System.Domain.model.UserRole;
 import com.example.Authentication_System.Domain.model.Session;
 import com.example.Authentication_System.Domain.model.Permission;
 import com.example.Authentication_System.Domain.model.AuditLog;
@@ -83,6 +84,28 @@ public class UserMapper {
                 .description(entity.getDescription())
                 .createdAt(entity.getCreatedAt() != null ?
                         entity.getCreatedAt().atZone(ZoneId.systemDefault()).toInstant() : null)
+                .build();
+    }
+
+    public static UserRoleEntity toEntity(UserRole userRole) {
+        return UserRoleEntity.builder()
+                .id(userRole.getId())
+                .userId(userRole.getUserId())
+                .roleId(userRole.getRoleId())
+                .assignedAt(userRole.getAssignedAt() != null ?
+                        LocalDateTime.ofInstant(userRole.getAssignedAt(), ZoneId.systemDefault()) : null)
+                .assignedBy(userRole.getAssignedBy())
+                .build();
+    }
+
+    public static UserRole toDomain(UserRoleEntity entity) {
+        return UserRole.builder()
+                .id(entity.getId())
+                .userId(entity.getUserId())
+                .roleId(entity.getRoleId())
+                .assignedAt(entity.getAssignedAt() != null ?
+                        entity.getAssignedAt().atZone(ZoneId.systemDefault()).toInstant() : null)
+                .assignedBy(entity.getAssignedBy())
                 .build();
     }
 
