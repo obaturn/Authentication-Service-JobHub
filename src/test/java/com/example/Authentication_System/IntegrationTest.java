@@ -4,6 +4,8 @@ import com.example.Authentication_System.Domain.model.*;
 import com.example.Authentication_System.Domain.repository.inputRepositoryPort.*;
 import com.example.Authentication_System.Security.JwtUtils;
 import com.example.Authentication_System.Services.AuditService;
+import com.example.Authentication_System.Services.EmailService;
+import com.example.Authentication_System.Services.MfaService;
 import com.example.Authentication_System.Services.UserServiceImplementations;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -46,6 +48,12 @@ class IntegrationTest {
     @Mock
     private AuditService auditService;
 
+    @Mock
+    private EmailService emailService;
+
+    @Mock
+    private MfaService mfaService;
+
     @InjectMocks
     private UserServiceImplementations userService;
 
@@ -55,40 +63,39 @@ class IntegrationTest {
     @BeforeEach
     void setUp() {
         userId = UUID.randomUUID();
-        testUser = User.builder()
-                .id(userId)
-                .firstName("John")
-                .lastName("Doe")
-                .email("john.doe@example.com")
-                .passwordHash("hashedPassword")
-                .userType("job_seeker")
-                .status("active")
-                .emailVerified(false)
-                .mfaEnabled(false)
-                .mfaSecret(null)
-                .googleId(null)
-                .avatarUrl(null)
+        UserProfile userProfile = UserProfile.builder()
                 .phone("1234567890")
                 .location("New York")
                 .bio("Test bio")
-                .createdAt(Instant.now())
-                .updatedAt(Instant.now())
-                .lastLoginAt(null)
                 .build();
+        testUser = User.builder()
+        		.id(userId)
+        		.firstName("John")
+        		.lastName("Doe")
+        		.email("john.doe@example.com")
+        		.passwordHash("hashedPassword")
+        		.userType("job_seeker")
+        		.status("active")
+        		.emailVerified(true)
+        		.mfaEnabled(false)
+        		.createdAt(Instant.now())
+        		.updatedAt(Instant.now())
+        		.lastLoginAt(null)
+        		.build();
+        testUser.setUserProfile(userProfile);
     }
 
     @Test
     void completeAuthenticationFlow_ShouldWorkEndToEnd() {
         // Step 1: Register
+        UserProfile profile = UserProfile.builder().phone("0987654321").location("LA").bio("New bio").build();
         User newUser = User.builder()
                 .firstName("Jane")
                 .lastName("Smith")
                 .email("jane.smith@example.com")
                 .passwordHash("password123")
-                .phone("0987654321")
-                .location("LA")
-                .bio("New bio")
                 .build();
+        newUser.setUserProfile(profile);
 
         Role jobSeekerRole = Role.builder().id(UUID.randomUUID()).name("job_seeker").build();
 
@@ -170,6 +177,7 @@ class IntegrationTest {
                 .email("test@example.com")
                 .passwordHash("password")
                 .build();
+        newUser.setUserProfile(UserProfile.builder().build());
 
         Role jobSeekerRole = Role.builder().id(UUID.randomUUID()).name("job_seeker").build();
 
@@ -199,6 +207,7 @@ class IntegrationTest {
                 .email("audit@example.com")
                 .passwordHash("password")
                 .build();
+        newUser.setUserProfile(UserProfile.builder().build());
 
         Role jobSeekerRole = Role.builder().id(UUID.randomUUID()).name("job_seeker").build();
 

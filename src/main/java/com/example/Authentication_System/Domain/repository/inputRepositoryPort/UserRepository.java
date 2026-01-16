@@ -9,4 +9,6 @@ public interface UserRepository {
     User save(User user);
     Optional<User> findByEmail(String email);
     Optional<User> findById(UUID id);
+    Optional<User> findByEmailVerificationToken(String token);
+    Optional<User> findByPasswordResetToken(String token);
 }

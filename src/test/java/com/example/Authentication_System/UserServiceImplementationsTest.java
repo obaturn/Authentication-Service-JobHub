@@ -4,6 +4,8 @@ import com.example.Authentication_System.Domain.model.*;
 import com.example.Authentication_System.Domain.repository.inputRepositoryPort.*;
 import com.example.Authentication_System.Security.JwtUtils;
 import com.example.Authentication_System.Services.AuditService;
+import com.example.Authentication_System.Services.EmailService;
+import com.example.Authentication_System.Services.MfaService;
 import com.example.Authentication_System.Services.UserServiceImplementations;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -46,6 +48,12 @@ class UserServiceImplementationsTest {
     @Mock
     private AuditService auditService;
 
+    @Mock
+    private EmailService emailService;
+
+    @Mock
+    private MfaService mfaService;
+
     @InjectMocks
     private UserServiceImplementations userService;
 
@@ -55,6 +63,12 @@ class UserServiceImplementationsTest {
     @BeforeEach
     void setUp() {
         userId = UUID.randomUUID();
+        UserProfile userProfile = UserProfile.builder()
+                .phone("1234567890")
+                .location("New York")
+                .bio("Test bio")
+                .build();
+
         testUser = User.builder()
                 .id(userId)
                 .firstName("John")
@@ -65,30 +79,24 @@ class UserServiceImplementationsTest {
                 .status("active")
                 .emailVerified(false)
                 .mfaEnabled(false)
-                .mfaSecret(null)
-                .googleId(null)
-                .avatarUrl(null)
-                .phone("1234567890")
-                .location("New York")
-                .bio("Test bio")
                 .createdAt(Instant.now())
                 .updatedAt(Instant.now())
                 .lastLoginAt(null)
                 .build();
+        testUser.setUserProfile(userProfile);
     }
 
     @Test
     void register_WithValidData_ShouldRegisterUser() {
         // Arrange
+        UserProfile profile = UserProfile.builder().phone("0987654321").location("LA").bio("New bio").build();
         User newUser = User.builder()
                 .firstName("Jane")
                 .lastName("Smith")
                 .email("jane.smith@example.com")
                 .passwordHash("password123")
-                .phone("0987654321")
-                .location("LA")
-                .bio("New bio")
                 .build();
+        newUser.setUserProfile(profile);
 
         Role jobSeekerRole = Role.builder().id(UUID.randomUUID()).name("job_seeker").build();
 
@@ -109,6 +117,142 @@ class UserServiceImplementationsTest {
         verify(roleRepository).findByName("job_seeker");
         verify(userRoleRepository).save(any(UserRole.class));
         verify(auditService).logEvent(eq(result.getId()), eq("REGISTER"), eq("User"), eq(result.getId()), anyString(), eq("127.0.0.1"), eq("Mozilla/5.0"));
+        verify(emailService).sendVerificationEmail(eq(result.getEmail()), anyString());
+    }
+
+    @Test
+    void login_WithUnverifiedEmail_ShouldThrowException() {
+        // Arrange
+        testUser.setEmailVerified(false);
+        when(userRepository.findByEmail(testUser.getEmail())).thenReturn(Optional.of(testUser));
+
+        // Act & Assert
+        assertThrows(IllegalStateException.class, () -> {
+            userService.login(testUser.getEmail(), "password123", "127.0.0.1", "Mozilla/5.0");
+        });
+    }
+
+    @Test
+    void verifyEmail_WithValidToken_ShouldVerifyEmail() {
+        // Arrange
+        String token = "valid-token";
+        testUser.setEmailVerified(false);
+        testUser.setEmailVerificationToken(token);
+        testUser.setEmailVerificationExpiresAt(Instant.now().plusSeconds(3600));
+        when(userRepository.findByEmailVerificationToken(token)).thenReturn(Optional.of(testUser));
+
+        // Act
+        boolean result = userService.verifyEmail(token);
+
+        // Assert
+        assertTrue(result);
+        assertTrue(testUser.isEmailVerified());
+        assertEquals("active", testUser.getStatus());
+        assertNull(testUser.getEmailVerificationToken());
+        verify(userRepository).save(testUser);
+    }
+
+    @Test
+    void forgotPassword_ShouldSendResetEmail() {
+        // Arrange
+        when(userRepository.findByEmail(testUser.getEmail())).thenReturn(Optional.of(testUser));
+
+        // Act
+        userService.forgotPassword(testUser.getEmail());
+
+        // Assert
+        assertNotNull(testUser.getPasswordResetToken());
+        verify(userRepository).save(testUser);
+        verify(emailService).sendPasswordResetEmail(eq(testUser.getEmail()), anyString());
+    }
+
+    @Test
+    void resetPassword_WithValidToken_ShouldResetPassword() {
+        // Arrange
+        String token = "valid-reset-token";
+        String newPassword = "newPassword123!";
+        testUser.setPasswordResetToken(token);
+        testUser.setPasswordResetExpiresAt(Instant.now().plusSeconds(3600));
+        when(userRepository.findByPasswordResetToken(token)).thenReturn(Optional.of(testUser));
+        when(passwordEncoder.encode(newPassword)).thenReturn("newHashedPassword");
+
+        // Act
+        userService.resetPassword(token, newPassword);
+
+        // Assert
+        assertEquals("newHashedPassword", testUser.getPasswordHash());
+        assertNull(testUser.getPasswordResetToken());
+        verify(userRepository).save(testUser);
+    }
+
+    @Test
+    void setupMfa_ShouldReturnSecretAndQrCode() {
+        // Arrange
+        when(userRepository.findById(userId)).thenReturn(Optional.of(testUser));
+        when(mfaService.generateNewSecret()).thenReturn("test-secret");
+        when(mfaService.generateQrCodeImageUri("test-secret", testUser.getEmail(), "JobHub")).thenReturn("test-qr-code");
+
+        // Act
+        MfaSetupResponse response = userService.setupMfa(userId);
+
+        // Assert
+        assertEquals("test-secret", response.getSecret());
+        assertEquals("test-qr-code", response.getQrCode());
+        assertEquals("test-secret", testUser.getMfaSecret());
+        verify(userRepository).save(testUser);
+    }
+
+    @Test
+    void enableMfa_WithValidCode_ShouldEnableMfa() {
+        // Arrange
+        testUser.setMfaSecret("test-secret");
+        when(userRepository.findById(userId)).thenReturn(Optional.of(testUser));
+        when(mfaService.isOtpValid("test-secret", "123456")).thenReturn(true);
+
+        // Act
+        userService.enableMfa(userId, "123456");
+
+        // Assert
+        assertTrue(testUser.isMfaEnabled());
+        verify(userRepository).save(testUser);
+    }
+
+    @Test
+    void login_WithMfaEnabled_ShouldReturnMfaToken() {
+        // Arrange
+        testUser.setEmailVerified(true);
+        testUser.setMfaEnabled(true);
+        when(userRepository.findByEmail(testUser.getEmail())).thenReturn(Optional.of(testUser));
+        when(passwordEncoder.matches("password123", testUser.getPasswordHash())).thenReturn(true);
+        when(jwtUtils.generateToken(testUser, 300000)).thenReturn("mfa-token");
+
+        // Act
+        Optional<AuthResponse> response = userService.login(testUser.getEmail(), "password123", "127.0.0.1", "Mozilla/5.0");
+
+        // Assert
+        assertTrue(response.isPresent());
+        assertEquals("mfa-token", response.get().getMfaToken());
+        assertNull(response.get().getAccessToken());
+    }
+
+    @Test
+    void verifyMfa_WithValidCode_ShouldReturnAuthResponse() {
+        // Arrange
+        testUser.setMfaSecret("test-secret");
+        String mfaToken = "mfa-token";
+        when(jwtUtils.getUserIdFromToken(mfaToken)).thenReturn(userId.toString());
+        when(userRepository.findById(userId)).thenReturn(Optional.of(testUser));
+        when(mfaService.isOtpValid("test-secret", "123456")).thenReturn(true);
+        when(jwtUtils.generateAccessToken(testUser)).thenReturn("access-token");
+        when(jwtUtils.generateRefreshToken(testUser)).thenReturn("refresh-token");
+
+        // Act
+        Optional<AuthResponse> response = userService.verifyMfa(mfaToken, "123456");
+
+        // Assert
+        assertTrue(response.isPresent());
+        assertEquals("access-token", response.get().getAccessToken());
+        verify(userRepository).save(testUser);
     }
 
     @Test
@@ -131,6 +275,7 @@ class UserServiceImplementationsTest {
     @Test
     void login_WithValidCredentials_ShouldReturnAuthResponse() {
         // Arrange
+        testUser.setEmailVerified(true);
         String email = "john.doe@example.com";
         String password = "password123";
 
@@ -177,6 +322,7 @@ class UserServiceImplementationsTest {
     @Test
     void login_WithSuspendedAccount_ShouldReturnEmpty() {
         // Arrange
+        testUser.setEmailVerified(true);
         User suspendedUser = testUser.toBuilder().status("suspended").build();
         String email = "john.doe@example.com";
         String password = "password123";
@@ -194,6 +340,7 @@ class UserServiceImplementationsTest {
     @Test
     void login_WithInvalidPassword_ShouldReturnEmpty() {
         // Arrange
+        testUser.setEmailVerified(true);
         String email = "john.doe@example.com";
         String password = "wrongpassword";
 
@@ -334,16 +481,16 @@ class UserServiceImplementationsTest {
     }
 
     @Test
-    void getProfile_WithValidUserId_ShouldReturnUser() {
+    void getProfile_WithValidUserId_ShouldReturnUserProfile() {
         // Arrange
         when(userRepository.findById(userId)).thenReturn(Optional.of(testUser));
 
         // Act
-        Optional<User> result = userService.getProfile(userId);
+        Optional<UserProfile> result = userService.getProfile(userId);
 
         // Assert
         assertTrue(result.isPresent());
-        assertEquals(testUser, result.get());
+        assertEquals(testUser.getUserProfile(), result.get());
     }
 
     @Test
@@ -353,7 +500,7 @@ class UserServiceImplementationsTest {
         when(userRepository.findById(invalidUserId)).thenReturn(Optional.empty());
 
         // Act
-        Optional<User> result = userService.getProfile(invalidUserId);
+        Optional<UserProfile> result = userService.getProfile(invalidUserId);
 
         // Assert
         assertFalse(result.isPresent());

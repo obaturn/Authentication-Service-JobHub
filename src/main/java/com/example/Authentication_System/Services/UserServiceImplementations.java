@@ -1,11 +1,6 @@
 package com.example.Authentication_System.Services;
 
-import com.example.Authentication_System.Domain.model.AuthResponse;
-import com.example.Authentication_System.Domain.model.ProfileUpdateRequest;
-import com.example.Authentication_System.Domain.model.RefreshToken;
-import com.example.Authentication_System.Domain.model.User;
-import com.example.Authentication_System.Domain.model.Role;
-import com.example.Authentication_System.Domain.model.UserRole;
+import com.example.Authentication_System.Domain.model.*;
 import com.example.Authentication_System.Domain.repository.OutPutRepositoryPort.UserUseCase;
 import com.example.Authentication_System.Domain.repository.inputRepositoryPort.RefreshTokenRepository;
 import com.example.Authentication_System.Domain.repository.inputRepositoryPort.UserRepository;
@@ -14,6 +9,7 @@ import com.example.Authentication_System.Domain.repository.inputRepositoryPort.U
 import com.example.Authentication_System.Security.JwtUtils;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -32,6 +28,8 @@ public class UserServiceImplementations implements UserUseCase {
     private final PasswordEncoder passwordEncoder;
     private final JwtUtils jwtUtils;
     private final AuditService auditService;
+    private final EmailService emailService;
+    private final MfaService mfaService;
 
     public UserServiceImplementations(UserRepository userRepository,
                                       RefreshTokenRepository refreshTokenRepository,
@@ -39,7 +37,9 @@ public class UserServiceImplementations implements UserUseCase {
                                       UserRoleRepository userRoleRepository,
                                       PasswordEncoder passwordEncoder,
                                       JwtUtils jwtUtils,
-                                      AuditService auditService) {
+                                      AuditService auditService,
+                                      EmailService emailService,
+                                      MfaService mfaService) {
         this.userRepository = userRepository;
         this.refreshTokenRepository = refreshTokenRepository;
         this.roleRepository = roleRepository;
@@ -47,6 +47,8 @@ public class UserServiceImplementations implements UserUseCase {
         this.passwordEncoder = passwordEncoder;
         this.jwtUtils = jwtUtils;
         this.auditService = auditService;
+        this.emailService = emailService;
+        this.mfaService = mfaService;
     }
 
     private String hashRefreshToken(String token) {
@@ -66,61 +68,53 @@ public class UserServiceImplementations implements UserUseCase {
     }
 
     @Override
+    @Transactional
     public User register(User user, String ipAddress, String userAgent) {
-        Optional<User> existing = userRepository.findByEmail(user.getEmail());
-        if (existing.isPresent()) {
+        if (userRepository.findByEmail(user.getEmail()).isPresent()) {
             throw new IllegalArgumentException("Email already in use");
         }
-
-
-        String hashedPassword = passwordEncoder.encode(user.getPasswordHash());
-
-
-        Instant now = Instant.now();
 
         User newUser = User.builder()
                 .id(UUID.randomUUID())
                 .firstName(user.getFirstName())
                 .lastName(user.getLastName())
                 .email(user.getEmail())
-                .passwordHash(hashedPassword)
+                .passwordHash(passwordEncoder.encode(user.getPasswordHash()))
                 .userType(user.getUserType() != null ? user.getUserType() : "job_seeker")
-                .status(user.getStatus() != null ? user.getStatus() : "active")
-                .emailVerified(false)
-                .mfaEnabled(false)
-                .mfaSecret(null)
-                .googleId(null)
-                .avatarUrl(null)
-                .phone(user.getPhone())
-                .location(user.getLocation())
-                .bio(user.getBio())
-                .createdAt(now)
-                .updatedAt(now)
-                .lastLoginAt(null)
+                .status("pending_verification")
                 .build();
+
+        UserProfile userProfile = UserProfile.builder()
+                .bio(user.getUserProfile() != null ? user.getUserProfile().getBio() : null)
+                .location(user.getUserProfile() != null ? user.getUserProfile().getLocation() : null)
+                .phone(user.getUserProfile() != null ? user.getUserProfile().getPhone() : null)
+                .build();
+
+        newUser.setUserProfile(userProfile);
+
+        // Generate and set email verification token
+        String token = UUID.randomUUID().toString();
+        newUser.setEmailVerificationToken(token);
+        newUser.setEmailVerificationExpiresAt(Instant.now().plusSeconds(86400)); // 24 hours
 
         User savedUser = userRepository.save(newUser);
 
-        // Assign default "job_seeker" role to new user
-        Optional<Role> jobSeekerRoleOpt = roleRepository.findByName("job_seeker");
-        if (jobSeekerRoleOpt.isPresent()) {
-            Role jobSeekerRole = jobSeekerRoleOpt.get();
+        // Assign default "job_seeker" role
+        roleRepository.findByName("job_seeker").ifPresent(jobSeekerRole -> {
             UserRole userRole = UserRole.builder()
-                    .id(UUID.randomUUID())
                     .userId(savedUser.getId())
                     .roleId(jobSeekerRole.getId())
                     .assignedAt(Instant.now())
-                    .assignedBy(savedUser.getId()) // Self-assigned during registration
                     .build();
             userRoleRepository.save(userRole);
-        }
+        });
 
-        // Audit log for user registration
+        emailService.sendVerificationEmail(savedUser.getEmail(), token);
         auditService.logEvent(savedUser.getId(), "REGISTER", "User", savedUser.getId(), "User registered successfully", ipAddress, userAgent);
 
         return savedUser;
-
     }
+
 
     @Override
     public Optional<AuthResponse> login(String email, String password, String ipAddress, String userAgent) {
@@ -134,6 +128,11 @@ public class UserServiceImplementations implements UserUseCase {
 
         User user = userOpt.get();
 
+        if (!user.isEmailVerified()) {
+            auditService.logEvent(user.getId(), "LOGIN_FAILED", "User", user.getId(), "Login failed: email not verified", ipAddress, userAgent);
+            throw new IllegalStateException("Email not verified");
+        }
+
         // Check user status - only allow active users to login
         if (!"active".equals(user.getStatus())) {
             // Audit log for login failure - account not active
@@ -146,6 +145,12 @@ public class UserServiceImplementations implements UserUseCase {
             // Audit log for login failure - invalid password
             auditService.logEvent(user.getId(), "LOGIN_FAILED", "User", user.getId(), "Login failed: invalid password", ipAddress, userAgent);
             return Optional.empty();
+        }
+
+        if (user.isMfaEnabled()) {
+            // Generate a temporary MFA token instead of full auth response
+            String mfaToken = jwtUtils.generateToken(user, 300000); // 5 minute expiry
+            return Optional.of(AuthResponse.builder().mfaToken(mfaToken).build());
         }
 
         // Generate tokens
@@ -196,29 +201,23 @@ public class UserServiceImplementations implements UserUseCase {
     }
 
     @Override
+    @Transactional
     public void updateProfile(UUID userId, ProfileUpdateRequest request, String ipAddress, String userAgent) {
-        Optional<User> existingOpt = userRepository.findById(userId);
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new IllegalArgumentException("User not found"));
 
-        if (existingOpt.isEmpty()) {
-            throw new IllegalArgumentException("User not found");
-        }
+        user.setFirstName(request.getFirstName() != null ? request.getFirstName() : user.getFirstName());
+        user.setLastName(request.getLastName() != null ? request.getLastName() : user.getLastName());
 
-        User existing = existingOpt.get();
+        UserProfile userProfile = user.getUserProfile();
+        userProfile.setAvatarUrl(request.getAvatarUrl() != null ? request.getAvatarUrl() : userProfile.getAvatarUrl());
+        userProfile.setPhone(request.getPhone() != null ? request.getPhone() : userProfile.getPhone());
+        userProfile.setLocation(request.getLocation() != null ? request.getLocation() : userProfile.getLocation());
+        userProfile.setBio(request.getBio() != null ? request.getBio() : userProfile.getBio());
 
-        User saved = existing.toBuilder()
-                .firstName(request.getFirstName() != null ? request.getFirstName() : existing.getFirstName())
-                .lastName(request.getLastName() != null ? request.getLastName() : existing.getLastName())
-                .avatarUrl(request.getAvatarUrl() != null ? request.getAvatarUrl() : existing.getAvatarUrl())
-                .phone(request.getPhone() != null ? request.getPhone() : existing.getPhone())
-                .location(request.getLocation() != null ? request.getLocation() : existing.getLocation())
-                .bio(request.getBio() != null ? request.getBio() : existing.getBio())
-                .updatedAt(Instant.now())
-                .build();
+        userRepository.save(user);
 
-        userRepository.save(saved);
-
-        // Audit log for profile update
-        auditService.logEvent(saved.getId(), "PROFILE_UPDATE", "User", saved.getId(), "User profile updated", ipAddress, userAgent);
+        auditService.logEvent(user.getId(), "PROFILE_UPDATE", "User", user.getId(), "User profile updated", ipAddress, userAgent);
     }
 
     @Override
@@ -304,8 +303,8 @@ public class UserServiceImplementations implements UserUseCase {
     }
 
     @Override
-    public Optional<User> getProfile(UUID userId) {
-        return userRepository.findById(userId);
+    public Optional<UserProfile> getProfile(UUID userId) {
+        return userRepository.findById(userId).map(User::getUserProfile);
     }
 
     @Override
@@ -332,4 +331,139 @@ public class UserServiceImplementations implements UserUseCase {
         auditService.logEvent(userId, "ACCOUNT_DEACTIVATION", "User", userId, "User account deactivated", ipAddress, userAgent);
     }
 
+    @Override
+    @Transactional
+    public void sendVerificationEmail(String email) {
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new IllegalArgumentException("User not found"));
+
+        if (user.isEmailVerified()) {
+            throw new IllegalStateException("Email is already verified");
+        }
+
+        String token = UUID.randomUUID().toString();
+        user.setEmailVerificationToken(token);
+        user.setEmailVerificationExpiresAt(Instant.now().plusSeconds(86400)); // 24 hours
+
+        userRepository.save(user);
+        emailService.sendVerificationEmail(user.getEmail(), token);
+    }
+
+    @Override
+    @Transactional
+    public boolean verifyEmail(String token) {
+        User user = userRepository.findByEmailVerificationToken(token)
+                .orElseThrow(() -> new IllegalArgumentException("Invalid verification token"));
+
+        if (user.getEmailVerificationExpiresAt().isBefore(Instant.now())) {
+            throw new IllegalStateException("Verification token has expired");
+        }
+
+        user.setEmailVerified(true);
+        user.setStatus("active");
+        user.setEmailVerificationToken(null);
+        user.setEmailVerificationExpiresAt(null);
+        userRepository.save(user);
+
+        return true;
+    }
+
+    @Override
+    @Transactional
+    public void forgotPassword(String email) {
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new IllegalArgumentException("User not found"));
+
+        String token = UUID.randomUUID().toString();
+        user.setPasswordResetToken(token);
+        user.setPasswordResetExpiresAt(Instant.now().plusSeconds(3600)); // 1 hour
+
+        userRepository.save(user);
+        emailService.sendPasswordResetEmail(user.getEmail(), token);
+    }
+
+    @Override
+    @Transactional
+    public void resetPassword(String token, String newPassword) {
+        User user = userRepository.findByPasswordResetToken(token)
+                .orElseThrow(() -> new IllegalArgumentException("Invalid password reset token"));
+
+        if (user.getPasswordResetExpiresAt().isBefore(Instant.now())) {
+            throw new IllegalStateException("Password reset token has expired");
+        }
+
+        user.setPasswordHash(passwordEncoder.encode(newPassword));
+        user.setPasswordResetToken(null);
+        user.setPasswordResetExpiresAt(null);
+        userRepository.save(user);
+    }
+
+    @Override
+    @Transactional
+    public MfaSetupResponse setupMfa(UUID userId) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new IllegalArgumentException("User not found"));
+
+        String secret = mfaService.generateNewSecret();
+        String qrCode = mfaService.generateQrCodeImageUri(secret, user.getEmail(), "JobHub");
+
+        user.setMfaSecret(secret);
+        userRepository.save(user);
+
+        return new MfaSetupResponse(secret, qrCode);
+    }
+
+    @Override
+    @Transactional
+    public void enableMfa(UUID userId, String code) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new IllegalArgumentException("User not found"));
+
+        if (!mfaService.isOtpValid(user.getMfaSecret(), code)) {
+            throw new IllegalArgumentException("Invalid MFA code");
+        }
+
+        user.setMfaEnabled(true);
+        userRepository.save(user);
+    }
+
+    @Override
+    public Optional<AuthResponse> verifyMfa(String mfaToken, String code) {
+        String userIdStr = jwtUtils.getUserIdFromToken(mfaToken);
+        if (userIdStr == null) {
+            throw new IllegalArgumentException("Invalid MFA token");
+        }
+
+        User user = userRepository.findById(UUID.fromString(userIdStr))
+                .orElseThrow(() -> new IllegalArgumentException("User not found"));
+
+        if (!mfaService.isOtpValid(user.getMfaSecret(), code)) {
+            throw new IllegalArgumentException("Invalid MFA code");
+        }
+
+        // MFA code is valid, proceed with generating full auth response
+        String accessToken = jwtUtils.generateAccessToken(user);
+        String refreshTokenValue = jwtUtils.generateRefreshToken(user);
+
+        RefreshToken refreshToken = RefreshToken.builder()
+                .id(UUID.randomUUID())
+                .userId(user.getId())
+                .tokenHash(passwordEncoder.encode(refreshTokenValue))
+                .expiresAt(Instant.now().plusMillis(604800000)) // 7 days
+                .createdAt(Instant.now())
+                .build();
+
+        refreshTokenRepository.save(refreshToken);
+
+        user.setLastLoginAt(Instant.now());
+        userRepository.save(user);
+
+        return Optional.of(AuthResponse.builder()
+                .accessToken(accessToken)
+                .refreshToken(refreshTokenValue)
+                .tokenType("Bearer")
+                .expiresIn(900000L)
+                .user(user)
+                .build());
+    }
 }

@@ -40,6 +40,18 @@ public class UserEntity {
     @Column(name = "email_verified")
     private boolean emailVerified;
 
+    @Column(name = "email_verification_token")
+    private String emailVerificationToken;
+
+    @Column(name = "email_verification_expires_at")
+    private LocalDateTime emailVerificationExpiresAt;
+
+    @Column(name = "password_reset_token")
+    private String passwordResetToken;
+
+    @Column(name = "password_reset_expires_at")
+    private LocalDateTime passwordResetExpiresAt;
+
     @Column(name = "mfa_enabled")
     private boolean mfaEnabled;
 
@@ -49,18 +61,6 @@ public class UserEntity {
     @Column(name = "google_id")
     private String googleId;
 
-    @Column(name = "avatar_url")
-    private String avatarUrl;
-
-    @Column
-    private String phone;
-
-    @Column
-    private String location;
-
-    @Column
-    private String bio;
-
     @Column(name = "created_at")
     private LocalDateTime createdAt;
 
@@ -69,4 +69,7 @@ public class UserEntity {
 
     @Column(name = "last_login_at")
     private LocalDateTime lastLoginAt;
+
+    @OneToOne(mappedBy = "user", cascade = CascadeType.PERSIST, fetch = FetchType.LAZY, optional = false)
+    private UserProfileEntity userProfile;
 }

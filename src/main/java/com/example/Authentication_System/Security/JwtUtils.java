@@ -2,11 +2,9 @@ package com.example.Authentication_System.Security;
 
 import com.example.Authentication_System.Domain.model.User;
 import io.jsonwebtoken.*;
-import io.jsonwebtoken.security.Keys;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
-import javax.crypto.SecretKey;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
@@ -15,8 +13,7 @@ import java.util.function.Function;
 @Component
 public class JwtUtils {
 
-    @Value("${jwt.secret:defaultSecretKeyThatShouldBeAtLeast256BitsLongForHS256Algorithm}")
-    private String jwtSecret;
+    private final JwtKeyProvider keyProvider;
 
     @Value("${jwt.access-token.expiration:900000}") // 15 minutes default
     private long jwtAccessTokenExpiration;
@@ -24,8 +21,8 @@ public class JwtUtils {
     @Value("${jwt.refresh-token.expiration:604800000}") // 7 days default
     private long jwtRefreshTokenExpiration;
 
-    private SecretKey getSigningKey() {
-        return Keys.hmacShaKeyFor(jwtSecret.getBytes());
+    public JwtUtils(JwtKeyProvider keyProvider) {
+        this.keyProvider = keyProvider;
     }
 
     public String generateAccessToken(User user) {
@@ -36,7 +33,7 @@ public class JwtUtils {
         return generateToken(user, jwtRefreshTokenExpiration);
     }
 
-    private String generateToken(User user, long expiration) {
+    public String generateToken(User user, long expiration) {
         Map<String, Object> claims = new HashMap<>();
         claims.put("userId", user.getId().toString());
         claims.put("email", user.getEmail());
@@ -47,14 +44,14 @@ public class JwtUtils {
                 .setSubject(user.getEmail())
                 .setIssuedAt(new Date())
                 .setExpiration(new Date(System.currentTimeMillis() + expiration))
-                .signWith(getSigningKey(), SignatureAlgorithm.HS256)
+                .signWith(keyProvider.getPrivateKey(), SignatureAlgorithm.RS256)
                 .compact();
     }
 
     public boolean validateToken(String token) {
         try {
             Jwts.parserBuilder()
-                .setSigningKey(getSigningKey())
+                .setSigningKey(keyProvider.getPublicKey())
                 .build()
                 .parseClaimsJws(token);
             return true;
@@ -86,7 +83,7 @@ public class JwtUtils {
 
     private Claims getAllClaimsFromToken(String token) {
         return Jwts.parserBuilder()
-                .setSigningKey(getSigningKey())
+                .setSigningKey(keyProvider.getPublicKey())
                 .build()
                 .parseClaimsJws(token)
                 .getBody();

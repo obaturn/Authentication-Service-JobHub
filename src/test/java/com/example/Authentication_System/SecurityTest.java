@@ -2,9 +2,8 @@ package com.example.Authentication_System;
 
 import com.example.Authentication_System.Domain.model.PasswordValidator;
 import com.example.Authentication_System.Domain.model.User;
-import com.example.Authentication_System.Domain.model.ValidPassword;
+import com.example.Authentication_System.Security.JwtKeyProvider;
 import com.example.Authentication_System.Security.JwtUtils;
-import io.jsonwebtoken.JwtException;
 import jakarta.validation.ConstraintValidatorContext;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -13,11 +12,14 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 
-import java.time.Instant;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.security.NoSuchAlgorithmException;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.Mockito.*;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class SecurityTest {
@@ -25,16 +27,24 @@ class SecurityTest {
     @Mock
     private ConstraintValidatorContext context;
 
+    @Mock
+    private JwtKeyProvider keyProvider;
+
     private PasswordValidator passwordValidator;
     private JwtUtils jwtUtils;
     private User testUser;
 
     @BeforeEach
-    void setUp() {
+    void setUp() throws NoSuchAlgorithmException {
+        KeyPairGenerator keyPairGenerator = KeyPairGenerator.getInstance("RSA");
+        keyPairGenerator.initialize(2048);
+        KeyPair keyPair = keyPairGenerator.generateKeyPair();
+
+        lenient().when(keyProvider.getPrivateKey()).thenReturn(keyPair.getPrivate());
+        lenient().when(keyProvider.getPublicKey()).thenReturn(keyPair.getPublic());
+
         passwordValidator = new PasswordValidator();
-        jwtUtils = new JwtUtils();
-        // Set secret and expiration for testing
-        ReflectionTestUtils.setField(jwtUtils, "jwtSecret", "testSecretKeyForJwtUtilsTestingPurposesOnly123456789");
+        jwtUtils = new JwtUtils(keyProvider);
         ReflectionTestUtils.setField(jwtUtils, "jwtAccessTokenExpiration", 900000L);
         ReflectionTestUtils.setField(jwtUtils, "jwtRefreshTokenExpiration", 604800000L);
 
@@ -207,7 +217,7 @@ class SecurityTest {
         
         // Wait for 1 second to ensure different issuedAt timestamp (JWT precision is usually seconds)
         Thread.sleep(1000);
-
+        
         String token2 = jwtUtils.generateRefreshToken(testUser);
 
         // Act & Assert

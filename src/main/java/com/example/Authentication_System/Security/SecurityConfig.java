@@ -25,10 +25,12 @@ public class SecurityConfig {
 
     private final UserRepository userRepository;
     private final JwtUtils jwtUtils;
+    private final RateLimitingFilter rateLimitingFilter;
 
-    public SecurityConfig(UserRepository userRepository, JwtUtils jwtUtils) {
+    public SecurityConfig(UserRepository userRepository, JwtUtils jwtUtils, RateLimitingFilter rateLimitingFilter) {
         this.userRepository = userRepository;
         this.jwtUtils = jwtUtils;
+        this.rateLimitingFilter = rateLimitingFilter;
     }
 
     @Bean
@@ -36,11 +38,13 @@ public class SecurityConfig {
         http
             .csrf(AbstractHttpConfigurer::disable)
             .authorizeHttpRequests(authz -> authz
-                .requestMatchers("/api/auth/register", "/api/auth/login", "/api/auth/refresh").permitAll()
+                .requestMatchers("/api/auth/register", "/api/auth/login", "/api/auth/refresh",
+                                 "/api/auth/verify-email/**", "/api/auth/password/**").permitAll()
                 .anyRequest().authenticated()
             )
             .sessionManagement(sess -> sess.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authenticationProvider(authenticationProvider())
+            .addFilterBefore(rateLimitingFilter, UsernamePasswordAuthenticationFilter.class) // Add rate limiting filter
             .addFilterBefore(jwtAuthenticationFilter(), UsernamePasswordAuthenticationFilter.class);
 
         return http.build();

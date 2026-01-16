@@ -8,15 +8,24 @@ import com.example.Authentication_System.Domain.model.Permission;
 import com.example.Authentication_System.Domain.model.AuditLog;
 import com.example.Authentication_System.Infrastructure.Persistence.Entity.*;
 
+import org.springframework.stereotype.Component;
+
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 
+@Component
 public class UserMapper {
 
-    public static UserEntity toEntity(User user) {
-        return UserEntity.builder()
+    private final UserProfileMapper userProfileMapper;
+
+    public UserMapper(UserProfileMapper userProfileMapper) {
+        this.userProfileMapper = userProfileMapper;
+    }
+
+    public UserEntity toEntity(User user) {
+        UserEntity.UserEntityBuilder builder = UserEntity.builder()
                 .id(user.getId())
                 .email(user.getEmail())
                 .passwordHash(user.getPasswordHash())
@@ -25,24 +34,35 @@ public class UserMapper {
                 .userType(user.getUserType())
                 .status(user.getStatus())
                 .emailVerified(user.isEmailVerified())
+                .emailVerificationToken(user.getEmailVerificationToken())
+                .emailVerificationExpiresAt(user.getEmailVerificationExpiresAt() != null ?
+                        LocalDateTime.ofInstant(user.getEmailVerificationExpiresAt(), ZoneId.systemDefault()) : null)
+                .passwordResetToken(user.getPasswordResetToken())
+                .passwordResetExpiresAt(user.getPasswordResetExpiresAt() != null ?
+                        LocalDateTime.ofInstant(user.getPasswordResetExpiresAt(), ZoneId.systemDefault()) : null)
                 .mfaEnabled(user.isMfaEnabled())
                 .mfaSecret(user.getMfaSecret())
                 .googleId(user.getGoogleId())
-                .avatarUrl(user.getAvatarUrl())
-                .phone(user.getPhone())
-                .location(user.getLocation())
-                .bio(user.getBio())
                 .createdAt(user.getCreatedAt() != null ?
                         LocalDateTime.ofInstant(user.getCreatedAt(), ZoneId.systemDefault()) : null)
                 .updatedAt(user.getUpdatedAt() != null ?
                         LocalDateTime.ofInstant(user.getUpdatedAt(), ZoneId.systemDefault()) : null)
                 .lastLoginAt(user.getLastLoginAt() != null ?
-                        LocalDateTime.ofInstant(user.getLastLoginAt(), ZoneId.systemDefault()) : null)
-                .build();
+                        LocalDateTime.ofInstant(user.getLastLoginAt(), ZoneId.systemDefault()) : null);
+
+        UserEntity userEntity = builder.build();
+
+        if (user.getUserProfile() != null) {
+            UserProfileEntity userProfileEntity = userProfileMapper.toEntity(user.getUserProfile());
+            userProfileEntity.setUser(userEntity); // Set the bidirectional relationship
+            userEntity.setUserProfile(userProfileEntity);
+        }
+
+        return userEntity;
     }
 
-    public static User toDomain(UserEntity entity) {
-        return User.builder()
+    public User toDomain(UserEntity entity) {
+        User.UserBuilder builder = User.builder()
                 .id(entity.getId())
                 .email(entity.getEmail())
                 .passwordHash(entity.getPasswordHash())
@@ -51,20 +71,27 @@ public class UserMapper {
                 .userType(entity.getUserType())
                 .status(entity.getStatus())
                 .emailVerified(entity.isEmailVerified())
+                .emailVerificationToken(entity.getEmailVerificationToken())
+                .emailVerificationExpiresAt(entity.getEmailVerificationExpiresAt() != null ?
+                        entity.getEmailVerificationExpiresAt().atZone(ZoneId.systemDefault()).toInstant() : null)
+                .passwordResetToken(entity.getPasswordResetToken())
+                .passwordResetExpiresAt(entity.getPasswordResetExpiresAt() != null ?
+                        entity.getPasswordResetExpiresAt().atZone(ZoneId.systemDefault()).toInstant() : null)
                 .mfaEnabled(entity.isMfaEnabled())
                 .mfaSecret(entity.getMfaSecret())
                 .googleId(entity.getGoogleId())
-                .avatarUrl(entity.getAvatarUrl())
-                .phone(entity.getPhone())
-                .location(entity.getLocation())
-                .bio(entity.getBio())
                 .createdAt(entity.getCreatedAt() != null ?
                         entity.getCreatedAt().atZone(ZoneId.systemDefault()).toInstant() : null)
                 .updatedAt(entity.getUpdatedAt() != null ?
                         entity.getUpdatedAt().atZone(ZoneId.systemDefault()).toInstant() : null)
                 .lastLoginAt(entity.getLastLoginAt() != null ?
-                        entity.getLastLoginAt().atZone(ZoneId.systemDefault()).toInstant() : null)
-                .build();
+                        entity.getLastLoginAt().atZone(ZoneId.systemDefault()).toInstant() : null);
+
+        if (entity.getUserProfile() != null) {
+            builder.userProfile(userProfileMapper.toDomain(entity.getUserProfile()));
+        }
+
+        return builder.build();
     }
 
     public static RoleEntity toEntity(Role role) {
