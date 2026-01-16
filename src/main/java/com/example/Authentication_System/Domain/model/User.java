@@ -68,6 +68,10 @@ public class User {
 
     private Instant lastLoginAt;
 
+    private int failedLoginAttempts;
+    private Instant accountLockedUntil;
+    private Instant lastFailedAttemptAt;
+
     // Helper method to link profile to user
     public void setUserProfile(UserProfile userProfile) {
         this.userProfile = userProfile;

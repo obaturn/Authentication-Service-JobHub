@@ -70,6 +70,15 @@ public class UserEntity {
     @Column(name = "last_login_at")
     private LocalDateTime lastLoginAt;
 
+    @Column(name = "failed_login_attempts")
+    private int failedLoginAttempts;
+
+    @Column(name = "account_locked_until")
+    private LocalDateTime accountLockedUntil;
+
+    @Column(name = "last_failed_attempt_at")
+    private LocalDateTime lastFailedAttemptAt;
+
     @OneToOne(mappedBy = "user", cascade = CascadeType.PERSIST, fetch = FetchType.LAZY, optional = false)
     private UserProfileEntity userProfile;
 }

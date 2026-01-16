@@ -38,4 +38,23 @@ public class RateLimitingService {
         Bandwidth limit = Bandwidth.classic(2, Refill.greedy(2, Duration.ofHours(1)));
         return cache.computeIfAbsent("register:" + ipAddress, k -> Bucket4j.builder().addLimit(limit).build());
     }
+
+    // User-based rate limiting for enhanced security
+    public Bucket resolveUserLoginBucket(String userId) {
+        // Stricter limits per user account: 3 attempts per 5 minutes
+        Bandwidth limit = Bandwidth.classic(3, Refill.greedy(3, Duration.ofMinutes(5)));
+        return cache.computeIfAbsent("user-login:" + userId, k -> Bucket4j.builder().addLimit(limit).build());
+    }
+
+    public Bucket resolveUserRegistrationBucket(String email) {
+        // 1 registration attempt per email per 10 minutes
+        Bandwidth limit = Bandwidth.classic(1, Refill.greedy(1, Duration.ofMinutes(10)));
+        return cache.computeIfAbsent("user-register:" + email.toLowerCase(), k -> Bucket4j.builder().addLimit(limit).build());
+    }
+
+    public Bucket resolvePasswordResetBucket(String email) {
+        // 2 password reset attempts per email per hour
+        Bandwidth limit = Bandwidth.classic(2, Refill.greedy(2, Duration.ofHours(1)));
+        return cache.computeIfAbsent("password-reset:" + email.toLowerCase(), k -> Bucket4j.builder().addLimit(limit).build());
+    }
 }

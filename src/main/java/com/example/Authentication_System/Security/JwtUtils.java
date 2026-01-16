@@ -14,6 +14,7 @@ import java.util.function.Function;
 public class JwtUtils {
 
     private final JwtKeyProvider keyProvider;
+    private final TokenBlacklistService tokenBlacklistService;
 
     @Value("${jwt.access-token.expiration:900000}") // 15 minutes default
     private long jwtAccessTokenExpiration;
@@ -21,8 +22,9 @@ public class JwtUtils {
     @Value("${jwt.refresh-token.expiration:604800000}") // 7 days default
     private long jwtRefreshTokenExpiration;
 
-    public JwtUtils(JwtKeyProvider keyProvider) {
+    public JwtUtils(JwtKeyProvider keyProvider, TokenBlacklistService tokenBlacklistService) {
         this.keyProvider = keyProvider;
+        this.tokenBlacklistService = tokenBlacklistService;
     }
 
     public String generateAccessToken(User user) {
@@ -50,6 +52,11 @@ public class JwtUtils {
 
     public boolean validateToken(String token) {
         try {
+            // First check if token is blacklisted
+            if (tokenBlacklistService.isTokenBlacklisted(token)) {
+                return false;
+            }
+
             Jwts.parserBuilder()
                 .setSigningKey(keyProvider.getPublicKey())
                 .build()

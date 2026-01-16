@@ -95,10 +95,19 @@ public class AuthController {
     @PostMapping("/logout")
     public ResponseEntity<Void> logout(HttpServletRequest request) {
         UUID userId = getCurrentUserId(request);
+        String accessToken = extractTokenFromRequest(request);
         String ipAddress = getClientIp(request);
         String userAgent = getUserAgent(request);
-        userUseCase.logout(userId, ipAddress, userAgent);
+        userUseCase.logout(userId, accessToken, ipAddress, userAgent);
         return ResponseEntity.ok().build();
+    }
+
+    private String extractTokenFromRequest(HttpServletRequest request) {
+        String authHeader = request.getHeader("Authorization");
+        if (authHeader != null && authHeader.startsWith("Bearer ")) {
+            return authHeader.substring(7);
+        }
+        return null;
     }
 
     @GetMapping("/profile")

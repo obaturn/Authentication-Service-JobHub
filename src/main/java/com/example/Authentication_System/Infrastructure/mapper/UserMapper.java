@@ -48,9 +48,14 @@ public class UserMapper {
                 .updatedAt(user.getUpdatedAt() != null ?
                         LocalDateTime.ofInstant(user.getUpdatedAt(), ZoneId.systemDefault()) : null)
                 .lastLoginAt(user.getLastLoginAt() != null ?
-                        LocalDateTime.ofInstant(user.getLastLoginAt(), ZoneId.systemDefault()) : null);
-
-        UserEntity userEntity = builder.build();
+                        LocalDateTime.ofInstant(user.getLastLoginAt(), ZoneId.systemDefault()) : null)
+                .failedLoginAttempts(user.getFailedLoginAttempts())
+                .accountLockedUntil(user.getAccountLockedUntil() != null ?
+                        LocalDateTime.ofInstant(user.getAccountLockedUntil(), ZoneId.systemDefault()) : null)
+                .lastFailedAttemptAt(user.getLastFailedAttemptAt() != null ?
+                        LocalDateTime.ofInstant(user.getLastFailedAttemptAt(), ZoneId.systemDefault()) : null);
+                
+                UserEntity userEntity = builder.build();
 
         if (user.getUserProfile() != null) {
             UserProfileEntity userProfileEntity = userProfileMapper.toEntity(user.getUserProfile());
@@ -85,9 +90,14 @@ public class UserMapper {
                 .updatedAt(entity.getUpdatedAt() != null ?
                         entity.getUpdatedAt().atZone(ZoneId.systemDefault()).toInstant() : null)
                 .lastLoginAt(entity.getLastLoginAt() != null ?
-                        entity.getLastLoginAt().atZone(ZoneId.systemDefault()).toInstant() : null);
-
-        if (entity.getUserProfile() != null) {
+                        entity.getLastLoginAt().atZone(ZoneId.systemDefault()).toInstant() : null)
+                .failedLoginAttempts(entity.getFailedLoginAttempts())
+                .accountLockedUntil(entity.getAccountLockedUntil() != null ?
+                        entity.getAccountLockedUntil().atZone(ZoneId.systemDefault()).toInstant() : null)
+                .lastFailedAttemptAt(entity.getLastFailedAttemptAt() != null ?
+                        entity.getLastFailedAttemptAt().atZone(ZoneId.systemDefault()).toInstant() : null);
+                
+                if (entity.getUserProfile() != null) {
             builder.userProfile(userProfileMapper.toDomain(entity.getUserProfile()));
         }
 

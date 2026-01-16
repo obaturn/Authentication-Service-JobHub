@@ -16,7 +16,7 @@ public interface UserUseCase {
     Optional<User> findById(UUID id);
     void updateProfile(UUID userId, ProfileUpdateRequest request, String ipAddress, String userAgent);
     AuthResponse refreshToken(String refreshToken, String ipAddress, String userAgent);
-    void logout(UUID userId, String ipAddress, String userAgent);
+    void logout(UUID userId, String accessToken, String ipAddress, String userAgent);
     Optional<UserProfile> getProfile(UUID userId);
     void deactivateAccount(UUID userId, String ipAddress, String userAgent);
 

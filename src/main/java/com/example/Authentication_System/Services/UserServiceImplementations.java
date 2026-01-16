@@ -30,6 +30,8 @@ public class UserServiceImplementations implements UserUseCase {
     private final AuditService auditService;
     private final EmailService emailService;
     private final MfaService mfaService;
+    private final AccountLockoutService accountLockoutService;
+    private final TokenBlacklistService tokenBlacklistService;
 
     public UserServiceImplementations(UserRepository userRepository,
                                       RefreshTokenRepository refreshTokenRepository,
@@ -39,7 +41,9 @@ public class UserServiceImplementations implements UserUseCase {
                                       JwtUtils jwtUtils,
                                       AuditService auditService,
                                       EmailService emailService,
-                                      MfaService mfaService) {
+                                      MfaService mfaService,
+                                      AccountLockoutService accountLockoutService,
+                                      TokenBlacklistService tokenBlacklistService) {
         this.userRepository = userRepository;
         this.refreshTokenRepository = refreshTokenRepository;
         this.roleRepository = roleRepository;
@@ -49,6 +53,8 @@ public class UserServiceImplementations implements UserUseCase {
         this.auditService = auditService;
         this.emailService = emailService;
         this.mfaService = mfaService;
+        this.accountLockoutService = accountLockoutService;
+        this.tokenBlacklistService = tokenBlacklistService;
     }
 
     private String hashRefreshToken(String token) {
@@ -128,8 +134,17 @@ public class UserServiceImplementations implements UserUseCase {
 
         User user = userOpt.get();
 
+        // Check if account is locked before proceeding
+        if (accountLockoutService.isAccountLocked(user.getId())) {
+            long remainingTime = accountLockoutService.getRemainingLockoutTime(user.getId());
+            auditService.logEvent(user.getId(), "LOGIN_FAILED", "User", user.getId(),
+                    "Login failed: account locked for " + remainingTime + " seconds", ipAddress, userAgent);
+            throw new IllegalStateException("Account is temporarily locked due to too many failed login attempts. Try again in " + remainingTime + " seconds.");
+        }
+
         if (!user.isEmailVerified()) {
             auditService.logEvent(user.getId(), "LOGIN_FAILED", "User", user.getId(), "Login failed: email not verified", ipAddress, userAgent);
+            accountLockoutService.recordFailedAttempt(user.getId(), ipAddress, userAgent);
             throw new IllegalStateException("Email not verified");
         }
 
@@ -137,13 +152,28 @@ public class UserServiceImplementations implements UserUseCase {
         if (!"active".equals(user.getStatus())) {
             // Audit log for login failure - account not active
             auditService.logEvent(user.getId(), "LOGIN_FAILED", "User", user.getId(), "Login failed: account status is " + user.getStatus(), ipAddress, userAgent);
+            accountLockoutService.recordFailedAttempt(user.getId(), ipAddress, userAgent);
             return Optional.empty();
         }
 
         boolean matches = passwordEncoder.matches(password, user.getPasswordHash());
         if (!matches) {
+            // Record failed attempt and apply progressive delay
+            accountLockoutService.recordFailedAttempt(user.getId(), ipAddress, userAgent);
+            long delay = accountLockoutService.getProgressiveDelay(user.getFailedLoginAttempts() + 1);
+
             // Audit log for login failure - invalid password
             auditService.logEvent(user.getId(), "LOGIN_FAILED", "User", user.getId(), "Login failed: invalid password", ipAddress, userAgent);
+
+            // Apply progressive delay for rapid attempts
+            if (delay > 0) {
+                try {
+                    Thread.sleep(delay * 1000); // Convert to milliseconds
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+
             return Optional.empty();
         }
 
@@ -175,6 +205,9 @@ public class UserServiceImplementations implements UserUseCase {
                 .build();
 
         userRepository.save(updatedUser);
+
+        // Record successful login (resets failed attempt counter)
+        accountLockoutService.recordSuccessfulLogin(user.getId());
 
         // Audit log for successful login
         auditService.logEvent(user.getId(), "LOGIN_SUCCESS", "User", user.getId(), "User logged in successfully", ipAddress, userAgent);
@@ -294,7 +327,14 @@ public class UserServiceImplementations implements UserUseCase {
     }
 
     @Override
-    public void logout(UUID userId, String ipAddress, String userAgent) {
+    public void logout(UUID userId, String accessToken, String ipAddress, String userAgent) {
+        // Blacklist the current access token
+        if (accessToken != null && !accessToken.isEmpty()) {
+            // Calculate token expiry (15 minutes from now as fallback)
+            long expiryTime = System.currentTimeMillis() + (15 * 60 * 1000);
+            tokenBlacklistService.blacklistToken(accessToken, expiryTime);
+        }
+
         // Revoke all refresh tokens for the user
         refreshTokenRepository.revokeAllTokensForUser(userId);
 
