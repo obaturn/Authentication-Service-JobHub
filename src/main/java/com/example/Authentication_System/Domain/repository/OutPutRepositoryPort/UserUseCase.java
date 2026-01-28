@@ -18,6 +18,7 @@ public interface UserUseCase {
     AuthResponse refreshToken(String refreshToken, String ipAddress, String userAgent);
     void logout(UUID userId, String accessToken, String ipAddress, String userAgent);
     Optional<UserProfile> getProfile(UUID userId);
+
     void deactivateAccount(UUID userId, String ipAddress, String userAgent);
 
     // Email Verification

@@ -6,26 +6,19 @@ import com.example.Authentication_System.Domain.model.UserRole;
 import com.example.Authentication_System.Domain.model.Session;
 import com.example.Authentication_System.Domain.model.Permission;
 import com.example.Authentication_System.Domain.model.AuditLog;
+import com.example.Authentication_System.Domain.model.BehaviorProfile;
+import com.example.Authentication_System.Domain.model.UserProfile;
 import com.example.Authentication_System.Infrastructure.Persistence.Entity.*;
-
-import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 
-@Component
 public class UserMapper {
 
-    private final UserProfileMapper userProfileMapper;
-
-    public UserMapper(UserProfileMapper userProfileMapper) {
-        this.userProfileMapper = userProfileMapper;
-    }
-
-    public UserEntity toEntity(User user) {
-        UserEntity.UserEntityBuilder builder = UserEntity.builder()
+    public static UserEntity toEntity(User user) {
+        UserEntity entity = UserEntity.builder()
                 .id(user.getId())
                 .email(user.getEmail())
                 .passwordHash(user.getPasswordHash())
@@ -43,31 +36,33 @@ public class UserMapper {
                 .mfaEnabled(user.isMfaEnabled())
                 .mfaSecret(user.getMfaSecret())
                 .googleId(user.getGoogleId())
+                .avatarUrl(user.getAvatarUrl())
+                .phone(user.getPhone())
+                .location(user.getLocation())
+                .bio(user.getBio())
                 .createdAt(user.getCreatedAt() != null ?
                         LocalDateTime.ofInstant(user.getCreatedAt(), ZoneId.systemDefault()) : null)
                 .updatedAt(user.getUpdatedAt() != null ?
                         LocalDateTime.ofInstant(user.getUpdatedAt(), ZoneId.systemDefault()) : null)
                 .lastLoginAt(user.getLastLoginAt() != null ?
                         LocalDateTime.ofInstant(user.getLastLoginAt(), ZoneId.systemDefault()) : null)
-                .failedLoginAttempts(user.getFailedLoginAttempts())
-                .accountLockedUntil(user.getAccountLockedUntil() != null ?
-                        LocalDateTime.ofInstant(user.getAccountLockedUntil(), ZoneId.systemDefault()) : null)
-                .lastFailedAttemptAt(user.getLastFailedAttemptAt() != null ?
-                        LocalDateTime.ofInstant(user.getLastFailedAttemptAt(), ZoneId.systemDefault()) : null);
+                .build();
                 
-                UserEntity userEntity = builder.build();
-
-        if (user.getUserProfile() != null) {
-            UserProfileEntity userProfileEntity = userProfileMapper.toEntity(user.getUserProfile());
-            userProfileEntity.setUser(userEntity); // Set the bidirectional relationship
-            userEntity.setUserProfile(userProfileEntity);
+        if (user.getBehaviorProfile() != null) {
+            entity.setBehaviorProfile(toBehaviorEntity(user.getBehaviorProfile()));
+            entity.getBehaviorProfile().setUser(entity);
         }
-
-        return userEntity;
+        
+        if (user.getUserProfile() != null) {
+            entity.setUserProfile(toUserProfileEntity(user.getUserProfile()));
+            entity.getUserProfile().setUser(entity);
+        }
+        
+        return entity;
     }
 
-    public User toDomain(UserEntity entity) {
-        User.UserBuilder builder = User.builder()
+    public static User toDomain(UserEntity entity) {
+        return User.builder()
                 .id(entity.getId())
                 .email(entity.getEmail())
                 .passwordHash(entity.getPasswordHash())
@@ -85,23 +80,83 @@ public class UserMapper {
                 .mfaEnabled(entity.isMfaEnabled())
                 .mfaSecret(entity.getMfaSecret())
                 .googleId(entity.getGoogleId())
+                .avatarUrl(entity.getAvatarUrl())
+                .phone(entity.getPhone())
+                .location(entity.getLocation())
+                .bio(entity.getBio())
+                .behaviorProfile(entity.getBehaviorProfile() != null ? 
+                        toBehaviorDomain(entity.getBehaviorProfile()) : null)
+                .userProfile(entity.getUserProfile() != null ?
+                        toUserProfileDomain(entity.getUserProfile()) : null)
                 .createdAt(entity.getCreatedAt() != null ?
                         entity.getCreatedAt().atZone(ZoneId.systemDefault()).toInstant() : null)
                 .updatedAt(entity.getUpdatedAt() != null ?
                         entity.getUpdatedAt().atZone(ZoneId.systemDefault()).toInstant() : null)
                 .lastLoginAt(entity.getLastLoginAt() != null ?
                         entity.getLastLoginAt().atZone(ZoneId.systemDefault()).toInstant() : null)
-                .failedLoginAttempts(entity.getFailedLoginAttempts())
-                .accountLockedUntil(entity.getAccountLockedUntil() != null ?
-                        entity.getAccountLockedUntil().atZone(ZoneId.systemDefault()).toInstant() : null)
-                .lastFailedAttemptAt(entity.getLastFailedAttemptAt() != null ?
-                        entity.getLastFailedAttemptAt().atZone(ZoneId.systemDefault()).toInstant() : null);
-                
-                if (entity.getUserProfile() != null) {
-            builder.userProfile(userProfileMapper.toDomain(entity.getUserProfile()));
-        }
-
-        return builder.build();
+                .build();
+    }
+    
+    private static BehaviorProfileEntity toBehaviorEntity(BehaviorProfile profile) {
+        return BehaviorProfileEntity.builder()
+                .id(profile.getId())
+                .viewedJobs(profile.getViewedJobs())
+                .appliedJobs(profile.getAppliedJobs())
+                .savedJobs(profile.getSavedJobs())
+                .postedJobs(profile.getPostedJobs())
+                .shortlistedCandidates(profile.getShortlistedCandidates())
+                .timeSpentMinutes(profile.getTimeSpentMinutes())
+                .lastActiveCategories(profile.getLastActiveCategories())
+                .lastActiveAt(profile.getLastActiveAt())
+                .build();
+    }
+    
+    private static BehaviorProfile toBehaviorDomain(BehaviorProfileEntity entity) {
+        return BehaviorProfile.builder()
+                .id(entity.getId())
+                .viewedJobs(entity.getViewedJobs())
+                .appliedJobs(entity.getAppliedJobs())
+                .savedJobs(entity.getSavedJobs())
+                .postedJobs(entity.getPostedJobs())
+                .shortlistedCandidates(entity.getShortlistedCandidates())
+                .timeSpentMinutes(entity.getTimeSpentMinutes())
+                .lastActiveCategories(entity.getLastActiveCategories())
+                .lastActiveAt(entity.getLastActiveAt())
+                .build();
+    }
+    
+    private static UserProfileEntity toUserProfileEntity(UserProfile profile) {
+        return UserProfileEntity.builder()
+                .id(profile.getId())
+                .headline(profile.getHeadline())
+                .bio(profile.getBio())
+                .location(profile.getLocation())
+                .avatarUrl(profile.getAvatarUrl())
+                .websiteUrl(profile.getWebsiteUrl())
+                .portfolioUrl(profile.getPortfolioUrl())
+                .phone(profile.getPhone())
+                .createdAt(profile.getCreatedAt() != null ?
+                        LocalDateTime.ofInstant(profile.getCreatedAt(), ZoneId.systemDefault()) : null)
+                .updatedAt(profile.getUpdatedAt() != null ?
+                        LocalDateTime.ofInstant(profile.getUpdatedAt(), ZoneId.systemDefault()) : null)
+                .build();
+    }
+    
+    private static UserProfile toUserProfileDomain(UserProfileEntity entity) {
+        return UserProfile.builder()
+                .id(entity.getId())
+                .headline(entity.getHeadline())
+                .bio(entity.getBio())
+                .location(entity.getLocation())
+                .avatarUrl(entity.getAvatarUrl())
+                .websiteUrl(entity.getWebsiteUrl())
+                .portfolioUrl(entity.getPortfolioUrl())
+                .phone(entity.getPhone())
+                .createdAt(entity.getCreatedAt() != null ?
+                        entity.getCreatedAt().atZone(ZoneId.systemDefault()).toInstant() : null)
+                .updatedAt(entity.getUpdatedAt() != null ?
+                        entity.getUpdatedAt().atZone(ZoneId.systemDefault()).toInstant() : null)
+                .build();
     }
 
     public static RoleEntity toEntity(Role role) {

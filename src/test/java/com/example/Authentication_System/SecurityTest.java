@@ -4,6 +4,7 @@ import com.example.Authentication_System.Domain.model.PasswordValidator;
 import com.example.Authentication_System.Domain.model.User;
 import com.example.Authentication_System.Security.JwtKeyProvider;
 import com.example.Authentication_System.Security.JwtUtils;
+import com.example.Authentication_System.Services.TokenBlacklistService;
 import jakarta.validation.ConstraintValidatorContext;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -30,6 +31,9 @@ class SecurityTest {
     @Mock
     private JwtKeyProvider keyProvider;
 
+    @Mock
+    private TokenBlacklistService tokenBlacklistService;
+
     private PasswordValidator passwordValidator;
     private JwtUtils jwtUtils;
     private User testUser;
@@ -44,7 +48,7 @@ class SecurityTest {
         lenient().when(keyProvider.getPublicKey()).thenReturn(keyPair.getPublic());
 
         passwordValidator = new PasswordValidator();
-        jwtUtils = new JwtUtils(keyProvider);
+        jwtUtils = new JwtUtils(keyProvider, tokenBlacklistService);
         ReflectionTestUtils.setField(jwtUtils, "jwtAccessTokenExpiration", 900000L);
         ReflectionTestUtils.setField(jwtUtils, "jwtRefreshTokenExpiration", 604800000L);
 

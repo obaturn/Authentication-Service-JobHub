@@ -3,9 +3,11 @@ package com.example.Authentication_System;
 import com.example.Authentication_System.Domain.model.*;
 import com.example.Authentication_System.Domain.repository.inputRepositoryPort.*;
 import com.example.Authentication_System.Security.JwtUtils;
+import com.example.Authentication_System.Services.AccountLockoutService;
 import com.example.Authentication_System.Services.AuditService;
 import com.example.Authentication_System.Services.EmailService;
 import com.example.Authentication_System.Services.MfaService;
+import com.example.Authentication_System.Services.TokenBlacklistService;
 import com.example.Authentication_System.Services.UserServiceImplementations;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -54,6 +56,12 @@ class IntegrationTest {
     @Mock
     private MfaService mfaService;
 
+    @Mock
+    private AccountLockoutService accountLockoutService;
+
+    @Mock
+    private TokenBlacklistService tokenBlacklistService;
+
     @InjectMocks
     private UserServiceImplementations userService;
 
@@ -83,6 +91,12 @@ class IntegrationTest {
         		.lastLoginAt(null)
         		.build();
         testUser.setUserProfile(userProfile);
+
+        // Mock account lockout service defaults
+        lenient().when(accountLockoutService.isAccountLocked(any(UUID.class))).thenReturn(false);
+        lenient().doNothing().when(accountLockoutService).recordFailedAttempt(any(UUID.class), anyString(), anyString());
+        lenient().doNothing().when(accountLockoutService).recordSuccessfulLogin(any(UUID.class));
+        lenient().when(accountLockoutService.getProgressiveDelay(anyInt())).thenReturn(0L);
     }
 
     @Test
@@ -152,7 +166,7 @@ class IntegrationTest {
         assertEquals("newRefreshToken", refreshResponse.getRefreshToken());
 
         // Step 4: Logout
-        userService.logout(userId, "127.0.0.1", "Mozilla/5.0");
+        userService.logout(userId, null, "127.0.0.1", "Mozilla/5.0");
 
         // Verify all interactions
         verify(userRepository, times(2)).findByEmail(anyString()); // Register and login
@@ -238,7 +252,7 @@ class IntegrationTest {
         verify(auditService).logEvent(eq(testUser.getId()), eq("LOGIN_SUCCESS"), eq("User"), eq(testUser.getId()), anyString(), eq("127.0.0.1"), eq("Mozilla/5.0"));
 
         // Act: Logout
-        userService.logout(testUser.getId(), "127.0.0.1", "Mozilla/5.0");
+        userService.logout(testUser.getId(), null, "127.0.0.1", "Mozilla/5.0");
 
         // Assert: Audit log for logout
         verify(auditService).logEvent(eq(testUser.getId()), eq("LOGOUT"), eq("User"), eq(testUser.getId()), anyString(), eq("127.0.0.1"), eq("Mozilla/5.0"));

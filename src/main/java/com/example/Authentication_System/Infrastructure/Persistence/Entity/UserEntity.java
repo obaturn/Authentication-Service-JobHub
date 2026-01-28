@@ -60,15 +60,11 @@ public class UserEntity {
 
     @Column(name = "google_id")
     private String googleId;
-
-    @Column(name = "created_at")
-    private LocalDateTime createdAt;
-
-    @Column(name = "updated_at")
-    private LocalDateTime updatedAt;
-
-    @Column(name = "last_login_at")
-    private LocalDateTime lastLoginAt;
+    
+    private String avatarUrl;
+    private String phone;
+    private String location;
+    private String bio;
 
     @Column(name = "failed_login_attempts")
     private int failedLoginAttempts;
@@ -79,6 +75,19 @@ public class UserEntity {
     @Column(name = "last_failed_attempt_at")
     private LocalDateTime lastFailedAttemptAt;
 
-    @OneToOne(mappedBy = "user", cascade = CascadeType.PERSIST, fetch = FetchType.LAZY, optional = false)
+    @Column(name = "created_at")
+    private LocalDateTime createdAt;
+
+    @Column(name = "updated_at")
+    private LocalDateTime updatedAt;
+
+    @Column(name = "last_login_at")
+    private LocalDateTime lastLoginAt;
+
+    // Relationship to Behavior Profile
+    @OneToOne(mappedBy = "user", cascade = CascadeType.ALL, fetch = FetchType.EAGER)
+    private BehaviorProfileEntity behaviorProfile;
+    
+    @OneToOne(cascade = CascadeType.ALL, fetch = FetchType.EAGER, mappedBy = "user")
     private UserProfileEntity userProfile;
 }

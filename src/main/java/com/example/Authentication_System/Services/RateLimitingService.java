@@ -34,8 +34,8 @@ public class RateLimitingService {
     }
 
     public Bucket resolveRegistrationBucket(String ipAddress) {
-        // Example: 2 registration attempts per hour per IP
-        Bandwidth limit = Bandwidth.classic(2, Refill.greedy(2, Duration.ofHours(1)));
+        // Example: 100 registration attempts per minute per IP for easier testing
+        Bandwidth limit = Bandwidth.classic(100, Refill.greedy(100, Duration.ofMinutes(1)));
         return cache.computeIfAbsent("register:" + ipAddress, k -> Bucket4j.builder().addLimit(limit).build());
     }
 

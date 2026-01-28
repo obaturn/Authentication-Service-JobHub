@@ -23,7 +23,7 @@ public class EmailService {
     public void sendVerificationEmail(String to, String token) {
         String subject = "Verify Your Email Address";
         // In a real app, the URL would point to your frontend application
-        String verificationUrl = "http://localhost:8080/api/auth/verify-email?token=" + token;
+        String verificationUrl = "http://localhost:8080/api/v1/auth/verify-email?token=" + token;
         String body = "Please click the link below to verify your email address:\n" + verificationUrl;
         sendEmail(to, subject, body);
     }

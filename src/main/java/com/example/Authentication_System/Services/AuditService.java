@@ -18,7 +18,7 @@ public class AuditService {
 
     public void logEvent(UUID userId, String action, String resource, UUID resourceId, String details, String ipAddress, String userAgent) {
         AuditLog auditLog = AuditLog.builder()
-                .id(UUID.randomUUID())
+                // .id(UUID.randomUUID()) // Removed manual ID generation to let Hibernate handle it
                 .userId(userId)
                 .action(action)
                 .resource(resource)

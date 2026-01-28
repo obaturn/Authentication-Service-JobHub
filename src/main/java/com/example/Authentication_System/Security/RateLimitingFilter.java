@@ -28,9 +28,9 @@ public class RateLimitingFilter extends OncePerRequestFilter {
 
         Bucket bucket = null;
 
-        if (requestUri.startsWith("/api/auth/login")) {
+        if (requestUri.startsWith("/api/v1/auth/login")) {
             bucket = rateLimitingService.resolveLoginBucket(ipAddress);
-        } else if (requestUri.startsWith("/api/auth/register")) {
+        } else if (requestUri.startsWith("/api/v1/auth/register")) {
             bucket = rateLimitingService.resolveRegistrationBucket(ipAddress);
         }
 

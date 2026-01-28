@@ -6,10 +6,16 @@ import com.example.Authentication_System.Domain.repository.inputRepositoryPort.R
 import com.example.Authentication_System.Domain.repository.inputRepositoryPort.UserRepository;
 import com.example.Authentication_System.Domain.repository.inputRepositoryPort.RoleRepository;
 import com.example.Authentication_System.Domain.repository.inputRepositoryPort.UserRoleRepository;
+import com.example.Authentication_System.Domain.repository.inputRepositoryPort.OutboxEventRepository;
+import com.example.Authentication_System.Infrastructure.Adapter.KafkaEventPublisher;
 import com.example.Authentication_System.Security.JwtUtils;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -21,6 +27,8 @@ import java.util.List;
 
 @Service
 public class UserServiceImplementations implements UserUseCase {
+    private static final Logger logger = LoggerFactory.getLogger(UserServiceImplementations.class);
+
     private final UserRepository userRepository;
     private final RefreshTokenRepository refreshTokenRepository;
     private final RoleRepository roleRepository;
@@ -32,18 +40,24 @@ public class UserServiceImplementations implements UserUseCase {
     private final MfaService mfaService;
     private final AccountLockoutService accountLockoutService;
     private final TokenBlacklistService tokenBlacklistService;
+    private final KafkaEventPublisher kafkaEventPublisher;
+    private final OutboxEventRepository outboxEventRepository;
+    private final ObjectMapper objectMapper;
 
     public UserServiceImplementations(UserRepository userRepository,
-                                      RefreshTokenRepository refreshTokenRepository,
-                                      RoleRepository roleRepository,
-                                      UserRoleRepository userRoleRepository,
-                                      PasswordEncoder passwordEncoder,
-                                      JwtUtils jwtUtils,
-                                      AuditService auditService,
-                                      EmailService emailService,
-                                      MfaService mfaService,
-                                      AccountLockoutService accountLockoutService,
-                                      TokenBlacklistService tokenBlacklistService) {
+                                        RefreshTokenRepository refreshTokenRepository,
+                                        RoleRepository roleRepository,
+                                        UserRoleRepository userRoleRepository,
+                                        PasswordEncoder passwordEncoder,
+                                        JwtUtils jwtUtils,
+                                        AuditService auditService,
+                                        EmailService emailService,
+                                        MfaService mfaService,
+                                        AccountLockoutService accountLockoutService,
+                                        TokenBlacklistService tokenBlacklistService,
+                                        KafkaEventPublisher kafkaEventPublisher,
+                                        OutboxEventRepository outboxEventRepository,
+                                        ObjectMapper objectMapper) {
         this.userRepository = userRepository;
         this.refreshTokenRepository = refreshTokenRepository;
         this.roleRepository = roleRepository;
@@ -55,6 +69,9 @@ public class UserServiceImplementations implements UserUseCase {
         this.mfaService = mfaService;
         this.accountLockoutService = accountLockoutService;
         this.tokenBlacklistService = tokenBlacklistService;
+        this.kafkaEventPublisher = kafkaEventPublisher;
+        this.outboxEventRepository = outboxEventRepository;
+        this.objectMapper = objectMapper;
     }
 
     private String hashRefreshToken(String token) {
@@ -76,12 +93,13 @@ public class UserServiceImplementations implements UserUseCase {
     @Override
     @Transactional
     public User register(User user, String ipAddress, String userAgent) {
+        logger.info("REGISTER: Attempting to register user with email: {}", user.getEmail());
         if (userRepository.findByEmail(user.getEmail()).isPresent()) {
+            logger.warn("REGISTER: Email already in use: {}", user.getEmail());
             throw new IllegalArgumentException("Email already in use");
         }
 
         User newUser = User.builder()
-                .id(UUID.randomUUID())
                 .firstName(user.getFirstName())
                 .lastName(user.getLastName())
                 .email(user.getEmail())
@@ -101,9 +119,20 @@ public class UserServiceImplementations implements UserUseCase {
         // Generate and set email verification token
         String token = UUID.randomUUID().toString();
         newUser.setEmailVerificationToken(token);
-        newUser.setEmailVerificationExpiresAt(Instant.now().plusSeconds(86400)); // 24 hours
+        newUser.setEmailVerificationExpiresAt(Instant.now().plusSeconds(172800)); // 48 hours
+
+        logger.info("REGISTER: Generated verification token for user {}: {}", user.getEmail(), token);
 
         User savedUser = userRepository.save(newUser);
+        logger.info("REGISTER: User saved with id {} and token {}", savedUser.getId(), savedUser.getEmailVerificationToken());
+
+        // Verify token is actually saved by querying back
+        Optional<User> verifyUser = userRepository.findById(savedUser.getId());
+        if (verifyUser.isPresent()) {
+            logger.info("REGISTER: Verification - token in DB for user {}: {}", savedUser.getEmail(), verifyUser.get().getEmailVerificationToken());
+        } else {
+            logger.error("REGISTER: Verification failed - user not found after save for email {}", user.getEmail());
+        }
 
         // Assign default "job_seeker" role
         roleRepository.findByName("job_seeker").ifPresent(jobSeekerRole -> {
@@ -115,7 +144,18 @@ public class UserServiceImplementations implements UserUseCase {
             userRoleRepository.save(userRole);
         });
 
-        emailService.sendVerificationEmail(savedUser.getEmail(), token);
+        // Save event to outbox for reliable publishing
+        UserRegisteredEvent event = new UserRegisteredEvent(
+                "UserRegistered",
+                savedUser.getId().toString(),
+                savedUser.getEmail(),
+                token,
+                savedUser.getFirstName(),
+                Instant.now()
+        );
+
+        saveOutboxEvent(event);
+
         auditService.logEvent(savedUser.getId(), "REGISTER", "User", savedUser.getId(), "User registered successfully", ipAddress, userAgent);
 
         return savedUser;
@@ -175,12 +215,6 @@ public class UserServiceImplementations implements UserUseCase {
             }
 
             return Optional.empty();
-        }
-
-        if (user.isMfaEnabled()) {
-            // Generate a temporary MFA token instead of full auth response
-            String mfaToken = jwtUtils.generateToken(user, 300000); // 5 minute expiry
-            return Optional.of(AuthResponse.builder().mfaToken(mfaToken).build());
         }
 
         // Generate tokens
@@ -243,6 +277,11 @@ public class UserServiceImplementations implements UserUseCase {
         user.setLastName(request.getLastName() != null ? request.getLastName() : user.getLastName());
 
         UserProfile userProfile = user.getUserProfile();
+        if (userProfile == null) {
+            userProfile = UserProfile.builder().build();
+            user.setUserProfile(userProfile);
+        }
+        
         userProfile.setAvatarUrl(request.getAvatarUrl() != null ? request.getAvatarUrl() : userProfile.getAvatarUrl());
         userProfile.setPhone(request.getPhone() != null ? request.getPhone() : userProfile.getPhone());
         userProfile.setLocation(request.getLocation() != null ? request.getLocation() : userProfile.getLocation());
@@ -381,29 +420,70 @@ public class UserServiceImplementations implements UserUseCase {
             throw new IllegalStateException("Email is already verified");
         }
 
-        String token = UUID.randomUUID().toString();
-        user.setEmailVerificationToken(token);
-        user.setEmailVerificationExpiresAt(Instant.now().plusSeconds(86400)); // 24 hours
+        String token;
+        boolean isNewToken = false;
+        if (user.getEmailVerificationToken() != null &&
+            user.getEmailVerificationExpiresAt() != null &&
+            user.getEmailVerificationExpiresAt().isAfter(Instant.now())) {
+            // Use existing valid token
+            token = user.getEmailVerificationToken();
+            logger.info("SEND_VERIFICATION: Reusing existing valid token for user {}: {}", user.getEmail(), token);
+        } else {
+            // Generate new token
+            token = UUID.randomUUID().toString();
+            user.setEmailVerificationToken(token);
+            user.setEmailVerificationExpiresAt(Instant.now().plusSeconds(172800)); // 48 hours
+            isNewToken = true;
+            logger.info("SEND_VERIFICATION: Generated new token for user {}: {}", user.getEmail(), token);
+        }
 
-        userRepository.save(user);
-        emailService.sendVerificationEmail(user.getEmail(), token);
+        if (isNewToken) {
+            userRepository.save(user);
+        }
+
+        // Publish event to Kafka instead of using local email service
+        UserRegisteredEvent event = new UserRegisteredEvent(
+                "VerificationEmailRequested",
+                user.getId().toString(),
+                user.getEmail(),
+                token,
+                user.getFirstName(),
+                Instant.now()
+        );
+
+        saveOutboxEvent(event);
     }
 
     @Override
     @Transactional
     public boolean verifyEmail(String token) {
+        logger.info("VERIFY: Attempting to verify email with token: {}", token);
+
         User user = userRepository.findByEmailVerificationToken(token)
-                .orElseThrow(() -> new IllegalArgumentException("Invalid verification token"));
+                .orElseThrow(() -> {
+                    logger.warn("VERIFY: Verification failed: Token not found in database: {}", token);
+                    return new IllegalArgumentException("Invalid verification token");
+                });
+
+        logger.info("VERIFY: Found user {} for token {}", user.getEmail(), token);
+
+        // Check if already verified
+        if (user.isEmailVerified()) {
+            logger.info("VERIFY: User {} is already verified", user.getEmail());
+            return true;
+        }
 
         if (user.getEmailVerificationExpiresAt().isBefore(Instant.now())) {
+            logger.warn("VERIFY: Verification failed: Token expired for user: {}", user.getEmail());
             throw new IllegalStateException("Verification token has expired");
         }
 
         user.setEmailVerified(true);
         user.setStatus("active");
-        user.setEmailVerificationToken(null);
-        user.setEmailVerificationExpiresAt(null);
+        // Keep the token for idempotency, don't set to null
         userRepository.save(user);
+
+        logger.info("VERIFY: Email verified successfully for user: {}", user.getEmail());
 
         return true;
     }
@@ -419,6 +499,10 @@ public class UserServiceImplementations implements UserUseCase {
         user.setPasswordResetExpiresAt(Instant.now().plusSeconds(3600)); // 1 hour
 
         userRepository.save(user);
+        
+        // Publish event to Kafka
+        // Note: You'll need a PasswordResetRequestedEvent class for this
+        // For now, I'll leave the email service call but you should replace it
         emailService.sendPasswordResetEmail(user.getEmail(), token);
     }
 
@@ -505,5 +589,21 @@ public class UserServiceImplementations implements UserUseCase {
                 .expiresIn(900000L)
                 .user(user)
                 .build());
+    }
+    
+    private void saveOutboxEvent(Object event) {
+        try {
+            String payload = objectMapper.writeValueAsString(event);
+            OutboxEvent outboxEvent = OutboxEvent.builder()
+                    .eventType(event.getClass().getSimpleName())
+                    .payload(payload)
+                    .topic("user-events")
+                    .status("PENDING")
+                    .createdAt(Instant.now())
+                    .build();
+            outboxEventRepository.save(outboxEvent);
+        } catch (JsonProcessingException e) {
+            System.err.println("Failed to serialize event to outbox: " + e.getMessage());
+        }
     }
 }

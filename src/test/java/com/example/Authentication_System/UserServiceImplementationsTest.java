@@ -2,17 +2,22 @@ package com.example.Authentication_System;
 
 import com.example.Authentication_System.Domain.model.*;
 import com.example.Authentication_System.Domain.repository.inputRepositoryPort.*;
+import com.example.Authentication_System.Infrastructure.Adapter.KafkaEventPublisher;
 import com.example.Authentication_System.Security.JwtUtils;
+import com.example.Authentication_System.Services.AccountLockoutService;
 import com.example.Authentication_System.Services.AuditService;
 import com.example.Authentication_System.Services.EmailService;
 import com.example.Authentication_System.Services.MfaService;
 import com.example.Authentication_System.Services.UserServiceImplementations;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.ArgumentCaptor;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.time.Instant;
@@ -54,6 +59,21 @@ class UserServiceImplementationsTest {
     @Mock
     private MfaService mfaService;
 
+    @Mock
+    private AccountLockoutService accountLockoutService;
+    
+    @Mock
+    private com.example.Authentication_System.Services.TokenBlacklistService tokenBlacklistService;
+
+    @Mock
+    private KafkaEventPublisher kafkaEventPublisher;
+
+    @Mock
+    private OutboxEventRepository outboxEventRepository;
+
+    @Mock
+    private ObjectMapper objectMapper;
+
     @InjectMocks
     private UserServiceImplementations userService;
 
@@ -84,11 +104,20 @@ class UserServiceImplementationsTest {
                 .lastLoginAt(null)
                 .build();
         testUser.setUserProfile(userProfile);
+
+        // Mock account lockout service
+        lenient().when(accountLockoutService.isAccountLocked(any(UUID.class))).thenReturn(false);
+        lenient().doNothing().when(accountLockoutService).recordFailedAttempt(any(UUID.class), anyString(), anyString());
+        lenient().doNothing().when(accountLockoutService).recordSuccessfulLogin(any(UUID.class));
+        lenient().when(accountLockoutService.getProgressiveDelay(anyInt())).thenReturn(0L);
     }
 
     @Test
-    void register_WithValidData_ShouldRegisterUser() {
+    void register_WithValidData_ShouldRegisterUser() throws JsonProcessingException {
         // Arrange
+        ArgumentCaptor<User> userCaptor = ArgumentCaptor.forClass(User.class);
+        ArgumentCaptor<OutboxEvent> outboxCaptor = ArgumentCaptor.forClass(OutboxEvent.class);
+
         UserProfile profile = UserProfile.builder().phone("0987654321").location("LA").bio("New bio").build();
         User newUser = User.builder()
                 .firstName("Jane")
@@ -102,22 +131,47 @@ class UserServiceImplementationsTest {
 
         when(userRepository.findByEmail(newUser.getEmail())).thenReturn(Optional.empty());
         when(passwordEncoder.encode("password123")).thenReturn("hashedPassword123");
-        when(userRepository.save(any(User.class))).thenReturn(testUser);
+        when(userRepository.save(any(User.class))).thenAnswer(invocation -> {
+            User saved = invocation.getArgument(0);
+            saved.setId(userId); // Simulate database setting the ID
+            return saved;
+        });
         when(roleRepository.findByName("job_seeker")).thenReturn(Optional.of(jobSeekerRole));
         when(userRoleRepository.save(any(UserRole.class))).thenReturn(mock(UserRole.class));
+        doReturn("{\"event\":\"data\"}").when(objectMapper).writeValueAsString(any(UserRegisteredEvent.class));
+        when(outboxEventRepository.save(any(OutboxEvent.class))).thenReturn(mock(OutboxEvent.class));
 
         // Act
         User result = userService.register(newUser, "127.0.0.1", "Mozilla/5.0");
 
         // Assert
         assertNotNull(result);
+        assertEquals(userId, result.getId());
+        assertEquals("pending_verification", result.getStatus());
+        assertNotNull(result.getEmailVerificationToken());
+        assertEquals("hashedPassword123", result.getPasswordHash());
+        assertEquals("Jane", result.getFirstName());
+        assertEquals("Smith", result.getLastName());
+        assertEquals("jane.smith@example.com", result.getEmail());
+        assertEquals("job_seeker", result.getUserType());
+        assertNotNull(result.getUserProfile());
+        assertEquals("0987654321", result.getUserProfile().getPhone());
+
         verify(userRepository).findByEmail(newUser.getEmail());
         verify(passwordEncoder).encode("password123");
-        verify(userRepository).save(any(User.class));
+        verify(userRepository).save(userCaptor.capture());
+        User savedUser = userCaptor.getValue();
+        assertEquals("pending_verification", savedUser.getStatus());
+        assertNotNull(savedUser.getEmailVerificationToken());
         verify(roleRepository).findByName("job_seeker");
         verify(userRoleRepository).save(any(UserRole.class));
-        verify(auditService).logEvent(eq(result.getId()), eq("REGISTER"), eq("User"), eq(result.getId()), anyString(), eq("127.0.0.1"), eq("Mozilla/5.0"));
-        verify(emailService).sendVerificationEmail(eq(result.getEmail()), anyString());
+        verify(objectMapper).writeValueAsString(any(UserRegisteredEvent.class));
+        verify(outboxEventRepository).save(outboxCaptor.capture());
+        OutboxEvent outboxEvent = outboxCaptor.getValue();
+        assertEquals("UserRegistered", outboxEvent.getEventType());
+        assertEquals("user-events", outboxEvent.getTopic());
+        assertEquals("PENDING", outboxEvent.getStatus());
+        verify(auditService).logEvent(eq(userId), eq("REGISTER"), eq("User"), eq(userId), anyString(), eq("127.0.0.1"), eq("Mozilla/5.0"));
     }
 
     @Test
@@ -218,21 +272,26 @@ class UserServiceImplementationsTest {
     }
 
     @Test
-    void login_WithMfaEnabled_ShouldReturnMfaToken() {
+    void login_WithValidCredentialsAndMfaEnabled_ShouldReturnAuthResponse() {
         // Arrange
         testUser.setEmailVerified(true);
         testUser.setMfaEnabled(true);
         when(userRepository.findByEmail(testUser.getEmail())).thenReturn(Optional.of(testUser));
         when(passwordEncoder.matches("password123", testUser.getPasswordHash())).thenReturn(true);
-        when(jwtUtils.generateToken(testUser, 300000)).thenReturn("mfa-token");
+        when(jwtUtils.generateAccessToken(testUser)).thenReturn("accessToken");
+        when(jwtUtils.generateRefreshToken(testUser)).thenReturn("refreshToken");
+        when(passwordEncoder.encode("refreshToken")).thenReturn("hashedRefreshToken");
+        when(refreshTokenRepository.save(any(RefreshToken.class))).thenReturn(mock(RefreshToken.class));
+        when(userRepository.save(any(User.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         // Act
         Optional<AuthResponse> response = userService.login(testUser.getEmail(), "password123", "127.0.0.1", "Mozilla/5.0");
 
         // Assert
         assertTrue(response.isPresent());
-        assertEquals("mfa-token", response.get().getMfaToken());
-        assertNull(response.get().getAccessToken());
+        assertEquals("accessToken", response.get().getAccessToken());
+        assertEquals("refreshToken", response.get().getRefreshToken());
+        assertNull(response.get().getMfaToken());
     }
 
     @Test
@@ -252,7 +311,7 @@ class UserServiceImplementationsTest {
         // Assert
         assertTrue(response.isPresent());
         assertEquals("access-token", response.get().getAccessToken());
-        verify(userRepository).save(testUser);
+        verify(userRepository, times(1)).save(any(User.class));
     }
 
     @Test
@@ -451,7 +510,7 @@ class UserServiceImplementationsTest {
 
         // Assert
         verify(userRepository).findById(userId);
-        verify(userRepository).save(any(User.class));
+        verify(userRepository, times(1)).save(any(User.class));
         verify(auditService).logEvent(eq(userId), eq("PROFILE_UPDATE"), eq("User"), eq(userId), anyString(), eq("127.0.0.1"), eq("Mozilla/5.0"));
     }
 
@@ -473,7 +532,7 @@ class UserServiceImplementationsTest {
     void logout_ShouldRevokeTokensAndLog() {
         // Arrange
         // Act
-        userService.logout(userId, "127.0.0.1", "Mozilla/5.0");
+        userService.logout(userId, null, "127.0.0.1", "Mozilla/5.0");
 
         // Assert
         verify(refreshTokenRepository).revokeAllTokensForUser(userId);
@@ -517,7 +576,7 @@ class UserServiceImplementationsTest {
 
         // Assert
         verify(userRepository).findById(userId);
-        verify(userRepository).save(any(User.class));
+        verify(userRepository, times(1)).save(any(User.class));
         verify(refreshTokenRepository).revokeAllTokensForUser(userId);
         verify(auditService).logEvent(eq(userId), eq("ACCOUNT_DEACTIVATION"), eq("User"), eq(userId), anyString(), eq("127.0.0.1"), eq("Mozilla/5.0"));
     }

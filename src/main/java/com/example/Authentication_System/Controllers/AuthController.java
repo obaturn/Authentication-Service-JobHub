@@ -8,12 +8,13 @@ import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.Collections;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
 @RestController
-@RequestMapping("/api/auth")
+@RequestMapping("/api/v1/auth")
 public class AuthController {
 
     private final UserUseCase userUseCase;
@@ -62,25 +63,18 @@ public class AuthController {
     public ResponseEntity<AuthResponse> login(@Valid @RequestBody LoginRequest loginRequest, HttpServletRequest request) {
         String ipAddress = getClientIp(request);
         String userAgent = getUserAgent(request);
-        Optional<AuthResponse> authResponse = userUseCase.login(loginRequest.getEmail(), loginRequest.getPassword(), ipAddress, userAgent);
-
-        if (authResponse.isEmpty()) {
-            return ResponseEntity.badRequest().build();
-        }
-
-        return ResponseEntity.ok(authResponse.get());
+        
+        return userUseCase.login(loginRequest.getEmail(), loginRequest.getPassword(), ipAddress, userAgent)
+                .map(ResponseEntity::ok)
+                .orElseThrow(() -> new IllegalArgumentException("Invalid email or password"));
     }
 
     @PostMapping("/refresh")
     public ResponseEntity<AuthResponse> refreshToken(@Valid @RequestBody RefreshTokenRequest refreshTokenRequest, HttpServletRequest request) {
-        try {
-            String ipAddress = getClientIp(request);
-            String userAgent = getUserAgent(request);
-            AuthResponse authResponse = userUseCase.refreshToken(refreshTokenRequest.getRefreshToken(), ipAddress, userAgent);
-            return ResponseEntity.ok(authResponse);
-        } catch (IllegalArgumentException e) {
-            return ResponseEntity.badRequest().build();
-        }
+        String ipAddress = getClientIp(request);
+        String userAgent = getUserAgent(request);
+        AuthResponse authResponse = userUseCase.refreshToken(refreshTokenRequest.getRefreshToken(), ipAddress, userAgent);
+        return ResponseEntity.ok(authResponse);
     }
 
     @PutMapping("/profile")
@@ -113,8 +107,9 @@ public class AuthController {
     @GetMapping("/profile")
     public ResponseEntity<UserProfile> getProfile(HttpServletRequest request) {
         UUID userId = getCurrentUserId(request);
-        Optional<UserProfile> userProfile = userUseCase.getProfile(userId);
-        return userProfile.map(ResponseEntity::ok).orElseGet(() -> ResponseEntity.notFound().build());
+        return userUseCase.getProfile(userId)
+                .map(ResponseEntity::ok)
+                .orElseThrow(() -> new IllegalArgumentException("User profile not found"));
     }
 
     @DeleteMapping("/account")
@@ -133,12 +128,19 @@ public class AuthController {
     }
 
     @GetMapping("/verify-email")
-    public ResponseEntity<String> verifyEmail(@RequestParam("token") String token) {
-        boolean isVerified = userUseCase.verifyEmail(token);
-        if (isVerified) {
-            return ResponseEntity.ok("Email verified successfully.");
+    public ResponseEntity<Map<String, String>> verifyEmail(@RequestParam("token") String token) {
+        userUseCase.verifyEmail(token);
+        return ResponseEntity.ok(Collections.singletonMap("message", "Email verified successfully."));
+    }
+    
+    @PostMapping("/verify-email")
+    public ResponseEntity<Map<String, String>> verifyEmailPost(@RequestBody Map<String, String> payload) {
+        String token = payload.get("token");
+        if (token == null) {
+             throw new IllegalArgumentException("Token is required");
         }
-        return ResponseEntity.badRequest().body("Invalid or expired verification token.");
+        userUseCase.verifyEmail(token);
+        return ResponseEntity.ok(Collections.singletonMap("message", "Email verified successfully."));
     }
 
     @PostMapping("/forgot-password")
@@ -170,6 +172,6 @@ public class AuthController {
     public ResponseEntity<AuthResponse> verifyMfa(@RequestBody Map<String, String> payload) {
         return userUseCase.verifyMfa(payload.get("mfaToken"), payload.get("code"))
                 .map(ResponseEntity::ok)
-                .orElse(ResponseEntity.badRequest().build());
+                .orElseThrow(() -> new IllegalArgumentException("Invalid MFA token or code"));
     }
 }

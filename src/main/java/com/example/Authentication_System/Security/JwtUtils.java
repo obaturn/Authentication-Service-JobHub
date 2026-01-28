@@ -1,6 +1,7 @@
 package com.example.Authentication_System.Security;
 
 import com.example.Authentication_System.Domain.model.User;
+import com.example.Authentication_System.Services.TokenBlacklistService;
 import io.jsonwebtoken.*;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -28,7 +29,18 @@ public class JwtUtils {
     }
 
     public String generateAccessToken(User user) {
-        return generateToken(user, jwtAccessTokenExpiration);
+        Map<String, Object> claims = new HashMap<>();
+        claims.put("userId", user.getId().toString());
+        claims.put("email", user.getEmail());
+        claims.put("userType", user.getUserType());
+
+        return Jwts.builder()
+                .setClaims(claims)
+                .setSubject(user.getEmail())
+                .setIssuedAt(new Date())
+                .setExpiration(new Date(System.currentTimeMillis() + jwtAccessTokenExpiration))
+                .signWith(keyProvider.getPrivateKey(), SignatureAlgorithm.RS256)
+                .compact();
     }
 
     public String generateRefreshToken(User user) {
@@ -77,6 +89,10 @@ public class JwtUtils {
 
     public String getUserTypeFromToken(String token) {
         return getClaimFromToken(token, claims -> claims.get("userType", String.class));
+    }
+
+    public String getInferredRoleFromToken(String token) {
+        return getClaimFromToken(token, claims -> claims.get("inferredRole", String.class));
     }
 
     public Date getExpirationDateFromToken(String token) {
