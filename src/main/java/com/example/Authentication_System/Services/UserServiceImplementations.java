@@ -8,7 +8,9 @@ import com.example.Authentication_System.Domain.repository.inputRepositoryPort.R
 import com.example.Authentication_System.Domain.repository.inputRepositoryPort.UserRoleRepository;
 import com.example.Authentication_System.Domain.repository.inputRepositoryPort.OutboxEventRepository;
 import com.example.Authentication_System.Infrastructure.Adapter.KafkaEventPublisher;
+import com.example.Authentication_System.Security.CryptoUtils;
 import com.example.Authentication_System.Security.JwtUtils;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -43,21 +45,23 @@ public class UserServiceImplementations implements UserUseCase {
     private final KafkaEventPublisher kafkaEventPublisher;
     private final OutboxEventRepository outboxEventRepository;
     private final ObjectMapper objectMapper;
+    private final CryptoUtils cryptoUtils;
 
     public UserServiceImplementations(UserRepository userRepository,
-                                        RefreshTokenRepository refreshTokenRepository,
-                                        RoleRepository roleRepository,
-                                        UserRoleRepository userRoleRepository,
-                                        PasswordEncoder passwordEncoder,
-                                        JwtUtils jwtUtils,
-                                        AuditService auditService,
-                                        EmailService emailService,
-                                        MfaService mfaService,
-                                        AccountLockoutService accountLockoutService,
-                                        TokenBlacklistService tokenBlacklistService,
-                                        KafkaEventPublisher kafkaEventPublisher,
-                                        OutboxEventRepository outboxEventRepository,
-                                        ObjectMapper objectMapper) {
+                                         RefreshTokenRepository refreshTokenRepository,
+                                         RoleRepository roleRepository,
+                                         UserRoleRepository userRoleRepository,
+                                         PasswordEncoder passwordEncoder,
+                                         JwtUtils jwtUtils,
+                                         AuditService auditService,
+                                         EmailService emailService,
+                                         MfaService mfaService,
+                                         AccountLockoutService accountLockoutService,
+                                         TokenBlacklistService tokenBlacklistService,
+                                         KafkaEventPublisher kafkaEventPublisher,
+                                         OutboxEventRepository outboxEventRepository,
+                                         ObjectMapper objectMapper,
+                                         CryptoUtils cryptoUtils) {
         this.userRepository = userRepository;
         this.refreshTokenRepository = refreshTokenRepository;
         this.roleRepository = roleRepository;
@@ -72,6 +76,7 @@ public class UserServiceImplementations implements UserUseCase {
         this.kafkaEventPublisher = kafkaEventPublisher;
         this.outboxEventRepository = outboxEventRepository;
         this.objectMapper = objectMapper;
+        this.cryptoUtils = cryptoUtils;
     }
 
     private String hashRefreshToken(String token) {
@@ -93,17 +98,19 @@ public class UserServiceImplementations implements UserUseCase {
     @Override
     @Transactional
     public User register(User user, String ipAddress, String userAgent) {
-        logger.info("REGISTER: Attempting to register user with email: {}", user.getEmail());
         if (userRepository.findByEmail(user.getEmail()).isPresent()) {
-            logger.warn("REGISTER: Email already in use: {}", user.getEmail());
             throw new IllegalArgumentException("Email already in use");
         }
+
+        // Use local encoder to ensure consistency
+        BCryptPasswordEncoder localEncoder = new BCryptPasswordEncoder();
+        String hashedPassword = localEncoder.encode(user.getPasswordHash());
 
         User newUser = User.builder()
                 .firstName(user.getFirstName())
                 .lastName(user.getLastName())
                 .email(user.getEmail())
-                .passwordHash(passwordEncoder.encode(user.getPasswordHash()))
+                .passwordHash(hashedPassword) // Store the hash
                 .userType(user.getUserType() != null ? user.getUserType() : "job_seeker")
                 .status("pending_verification")
                 .build();
@@ -121,18 +128,7 @@ public class UserServiceImplementations implements UserUseCase {
         newUser.setEmailVerificationToken(token);
         newUser.setEmailVerificationExpiresAt(Instant.now().plusSeconds(172800)); // 48 hours
 
-        logger.info("REGISTER: Generated verification token for user {}: {}", user.getEmail(), token);
-
         User savedUser = userRepository.save(newUser);
-        logger.info("REGISTER: User saved with id {} and token {}", savedUser.getId(), savedUser.getEmailVerificationToken());
-
-        // Verify token is actually saved by querying back
-        Optional<User> verifyUser = userRepository.findById(savedUser.getId());
-        if (verifyUser.isPresent()) {
-            logger.info("REGISTER: Verification - token in DB for user {}: {}", savedUser.getEmail(), verifyUser.get().getEmailVerificationToken());
-        } else {
-            logger.error("REGISTER: Verification failed - user not found after save for email {}", user.getEmail());
-        }
 
         // Assign default "job_seeker" role
         roleRepository.findByName("job_seeker").ifPresent(jobSeekerRole -> {
@@ -196,7 +192,16 @@ public class UserServiceImplementations implements UserUseCase {
             return Optional.empty();
         }
 
-        boolean matches = passwordEncoder.matches(password, user.getPasswordHash());
+        boolean matches = false;
+        try {
+            // Use local encoder to match registration logic
+            BCryptPasswordEncoder localEncoder = new BCryptPasswordEncoder();
+            matches = localEncoder.matches(password, user.getPasswordHash());
+        } catch (IllegalArgumentException e) {
+            logger.warn("LOGIN WARNING: BCrypt check failed with exception for user {}. Treating as invalid password. Error: {}", email, e.getMessage());
+            matches = false;
+        }
+
         if (!matches) {
             // Record failed attempt and apply progressive delay
             accountLockoutService.recordFailedAttempt(user.getId(), ipAddress, userAgent);
@@ -223,9 +228,9 @@ public class UserServiceImplementations implements UserUseCase {
 
         // Store refresh token
         RefreshToken refreshToken = RefreshToken.builder()
-                .id(UUID.randomUUID())
+                // .id(UUID.randomUUID()) // Removed manual ID generation to let Hibernate handle it
                 .userId(user.getId())
-                .tokenHash(passwordEncoder.encode(refreshTokenValue))
+                .tokenHash(hashRefreshToken(refreshTokenValue)) // Use SHA-256 instead of BCrypt for long tokens
                 .expiresAt(Instant.now().plusMillis(604800000)) // 7 days
                 .createdAt(Instant.now())
                 .build();
@@ -311,8 +316,10 @@ public class UserServiceImplementations implements UserUseCase {
         RefreshToken matchedToken = null;
         
         // 3. Iterate and check matches
+        String hashedInputToken = hashRefreshToken(refreshTokenValue);
         for (RefreshToken token : userTokens) {
-            if (passwordEncoder.matches(refreshTokenValue, token.getTokenHash())) {
+            // Use simple string comparison for SHA-256 hashes
+            if (hashedInputToken.equals(token.getTokenHash())) {
                 matchedToken = token;
                 break;
             }
@@ -344,9 +351,9 @@ public class UserServiceImplementations implements UserUseCase {
 
         // Store new refresh token
         RefreshToken newRefreshToken = RefreshToken.builder()
-                .id(UUID.randomUUID())
+                // .id(UUID.randomUUID()) // Removed manual ID generation
                 .userId(user.getId())
-                .tokenHash(passwordEncoder.encode(newRefreshTokenValue))
+                .tokenHash(hashRefreshToken(newRefreshTokenValue)) // Use SHA-256
                 .expiresAt(Instant.now().plusMillis(604800000)) // 7 days
                 .createdAt(Instant.now())
                 .build();
@@ -366,6 +373,7 @@ public class UserServiceImplementations implements UserUseCase {
     }
 
     @Override
+    @Transactional
     public void logout(UUID userId, String accessToken, String ipAddress, String userAgent) {
         // Blacklist the current access token
         if (accessToken != null && !accessToken.isEmpty()) {
@@ -413,11 +421,16 @@ public class UserServiceImplementations implements UserUseCase {
     @Override
     @Transactional
     public void sendVerificationEmail(String email) {
-        User user = userRepository.findByEmail(email)
-                .orElseThrow(() -> new IllegalArgumentException("User not found"));
+        Optional<User> userOpt = userRepository.findByEmail(email);
+        if (userOpt.isEmpty()) {
+            // Return silently to prevent enumeration
+            return;
+        }
 
+        User user = userOpt.get();
         if (user.isEmailVerified()) {
-            throw new IllegalStateException("Email is already verified");
+            // Return silently
+            return;
         }
 
         String token;
@@ -491,15 +504,19 @@ public class UserServiceImplementations implements UserUseCase {
     @Override
     @Transactional
     public void forgotPassword(String email) {
-        User user = userRepository.findByEmail(email)
-                .orElseThrow(() -> new IllegalArgumentException("User not found"));
+        Optional<User> userOpt = userRepository.findByEmail(email);
+        if (userOpt.isEmpty()) {
+            // Return silently to prevent enumeration
+            return;
+        }
 
+        User user = userOpt.get();
         String token = UUID.randomUUID().toString();
-        user.setPasswordResetToken(token);
+        user.setPasswordResetToken(cryptoUtils.hashWithSHA256(token));
         user.setPasswordResetExpiresAt(Instant.now().plusSeconds(3600)); // 1 hour
 
         userRepository.save(user);
-        
+
         // Publish event to Kafka
         // Note: You'll need a PasswordResetRequestedEvent class for this
         // For now, I'll leave the email service call but you should replace it
@@ -509,13 +526,15 @@ public class UserServiceImplementations implements UserUseCase {
     @Override
     @Transactional
     public void resetPassword(String token, String newPassword) {
-        User user = userRepository.findByPasswordResetToken(token)
+        String hashedToken = cryptoUtils.hashWithSHA256(token);
+        User user = userRepository.findByPasswordResetToken(hashedToken)
                 .orElseThrow(() -> new IllegalArgumentException("Invalid password reset token"));
 
         if (user.getPasswordResetExpiresAt().isBefore(Instant.now())) {
             throw new IllegalStateException("Password reset token has expired");
         }
 
+        logger.info("RESET: New password length before encoding: {}", newPassword.length());
         user.setPasswordHash(passwordEncoder.encode(newPassword));
         user.setPasswordResetToken(null);
         user.setPasswordResetExpiresAt(null);
@@ -531,7 +550,7 @@ public class UserServiceImplementations implements UserUseCase {
         String secret = mfaService.generateNewSecret();
         String qrCode = mfaService.generateQrCodeImageUri(secret, user.getEmail(), "JobHub");
 
-        user.setMfaSecret(secret);
+        user.setMfaSecret(cryptoUtils.encrypt(secret));
         userRepository.save(user);
 
         return new MfaSetupResponse(secret, qrCode);
@@ -561,7 +580,8 @@ public class UserServiceImplementations implements UserUseCase {
         User user = userRepository.findById(UUID.fromString(userIdStr))
                 .orElseThrow(() -> new IllegalArgumentException("User not found"));
 
-        if (!mfaService.isOtpValid(user.getMfaSecret(), code)) {
+        String decryptedSecret = cryptoUtils.decrypt(user.getMfaSecret());
+        if (!mfaService.isOtpValid(decryptedSecret, code)) {
             throw new IllegalArgumentException("Invalid MFA code");
         }
 

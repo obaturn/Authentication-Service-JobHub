@@ -21,7 +21,10 @@ public class UserMapper {
         UserEntity entity = UserEntity.builder()
                 .id(user.getId())
                 .email(user.getEmail())
-                .passwordHash(user.getPasswordHash())
+                // If passwordHash is present (e.g. from DB or already hashed), use it.
+                // Otherwise, if raw password is present, it will be hashed in the service layer before saving.
+                // The mapper should just map what's available.
+                .passwordHash(user.getPasswordHash()) 
                 .firstName(user.getFirstName())
                 .lastName(user.getLastName())
                 .userType(user.getUserType())
@@ -65,7 +68,7 @@ public class UserMapper {
         return User.builder()
                 .id(entity.getId())
                 .email(entity.getEmail())
-                .passwordHash(entity.getPasswordHash())
+                .passwordHash(entity.getPasswordHash()) // Map the hash back to the domain model
                 .firstName(entity.getFirstName())
                 .lastName(entity.getLastName())
                 .userType(entity.getUserType())

@@ -5,6 +5,8 @@ import com.example.Authentication_System.Domain.repository.OutPutRepositoryPort.
 import com.example.Authentication_System.Security.JwtUtils;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -16,6 +18,8 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/api/v1/auth")
 public class AuthController {
+
+    private static final Logger logger = LoggerFactory.getLogger(AuthController.class);
 
     private final UserUseCase userUseCase;
     private final JwtUtils jwtUtils;
@@ -53,6 +57,7 @@ public class AuthController {
 
     @PostMapping("/register")
     public ResponseEntity<User> register(@Valid @RequestBody User user, HttpServletRequest request) {
+        logger.info("REGISTER CONTROLLER: Password length: {}", user.getPasswordHash().length());
         String ipAddress = getClientIp(request);
         String userAgent = getUserAgent(request);
         User registeredUser = userUseCase.register(user, ipAddress, userAgent);
@@ -61,9 +66,10 @@ public class AuthController {
 
     @PostMapping("/login")
     public ResponseEntity<AuthResponse> login(@Valid @RequestBody LoginRequest loginRequest, HttpServletRequest request) {
+        logger.info("LOGIN CONTROLLER: Password length: {}", loginRequest.getPassword().length());
         String ipAddress = getClientIp(request);
         String userAgent = getUserAgent(request);
-        
+
         return userUseCase.login(loginRequest.getEmail(), loginRequest.getPassword(), ipAddress, userAgent)
                 .map(ResponseEntity::ok)
                 .orElseThrow(() -> new IllegalArgumentException("Invalid email or password"));
@@ -122,9 +128,9 @@ public class AuthController {
     }
 
     @PostMapping("/send-verification-email")
-    public ResponseEntity<Void> sendVerificationEmail(@RequestBody Map<String, String> payload) {
+    public ResponseEntity<Map<String, String>> sendVerificationEmail(@RequestBody Map<String, String> payload) {
         userUseCase.sendVerificationEmail(payload.get("email"));
-        return ResponseEntity.ok().build();
+        return ResponseEntity.ok(Collections.singletonMap("message", "If the email exists, a verification email has been sent."));
     }
 
     @GetMapping("/verify-email")
@@ -144,9 +150,9 @@ public class AuthController {
     }
 
     @PostMapping("/forgot-password")
-    public ResponseEntity<Void> forgotPassword(@RequestBody Map<String, String> payload) {
+    public ResponseEntity<Map<String, String>> forgotPassword(@RequestBody Map<String, String> payload) {
         userUseCase.forgotPassword(payload.get("email"));
-        return ResponseEntity.ok().build();
+        return ResponseEntity.ok(Collections.singletonMap("message", "If the email exists, a password reset email has been sent."));
     }
 
     @PostMapping("/reset-password")

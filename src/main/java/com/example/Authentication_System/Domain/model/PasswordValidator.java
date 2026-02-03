@@ -7,7 +7,7 @@ import java.util.regex.Pattern;
 public class PasswordValidator implements ConstraintValidator<ValidPassword, String> {
 
     private static final Pattern PASSWORD_PATTERN = Pattern.compile(
-        "^(?=.*[a-z])(?=.*[A-Z])(?=.*\\d)(?=.*[@$!%*?&])[A-Za-z\\d@$!%*?&]{8,}$"
+        "^(?=.*[a-z])(?=.*[A-Z])(?=.*\\d)(?=.*[@$!%*?&])[A-Za-z\\d@$!%*?&]{8,72}$"
     );
 
     @Override

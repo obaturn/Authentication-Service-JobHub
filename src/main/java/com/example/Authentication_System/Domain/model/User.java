@@ -1,5 +1,6 @@
 package com.example.Authentication_System.Domain.model;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.validation.constraints.*;
 import lombok.*;
 import java.time.Instant;
@@ -19,7 +20,9 @@ public class User {
 
     @ValidPassword
     @NotBlank(message = "Password is required")
-    private String passwordHash; // Used for input password during registration
+    // This field receives the RAW password from frontend during registration/login
+    // And holds the HASHED password when fetching from DB
+    private String passwordHash;
 
     @NotBlank(message = "First name is required")
     @Size(min = 1, max = 50, message = "First name must be between 1 and 50 characters")
@@ -56,12 +59,8 @@ public class User {
     private Instant accountLockedUntil;
     private Instant lastFailedAttemptAt;
     
-    // ⭐ NEW: Behavior Profile (Hybrid RBAC)
     private BehaviorProfile behaviorProfile;
     
-    // Legacy/External Profile link (if needed by other parts of the system, keeping it generic for now)
-    // If 'UserProfile' is a specific class you have, we can add it, but usually flat fields are better in Domain.
-    // Based on errors, it seems there was a 'userProfile' field. I will add it back if it exists in the project.
     private UserProfile userProfile;
     
     private Instant createdAt;

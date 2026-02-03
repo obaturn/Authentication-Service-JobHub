@@ -34,8 +34,8 @@ public class SecurityConfig {
     private final JwtUtils jwtUtils;
     private final RateLimitingFilter rateLimitingFilter;
 
-    @Value("${cors.allowed-origins:http://localhost:3000}") // Default to localhost:3000
-    private String allowedOrigins;
+    // Fixed allowed origins for security - update for production domains
+    private final List<String> allowedOrigins = Arrays.asList("http://localhost:3000");
 
     public SecurityConfig(UserRepository userRepository, JwtUtils jwtUtils, RateLimitingFilter rateLimitingFilter) {
         this.userRepository = userRepository;
@@ -64,14 +64,13 @@ public class SecurityConfig {
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
-        // Split by comma to allow multiple origins (e.g., "https://jobhub.com,https://admin.jobhub.com")
-        configuration.setAllowedOrigins(Arrays.asList(allowedOrigins.split(",")));
+        configuration.setAllowedOrigins(allowedOrigins);
         configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"));
         configuration.setAllowedHeaders(Arrays.asList("Authorization", "Content-Type", "X-Requested-With", "Accept", "Origin", "Access-Control-Request-Method", "Access-Control-Request-Headers"));
         configuration.setExposedHeaders(Arrays.asList("Authorization")); // Important if you send tokens in headers
         configuration.setAllowCredentials(true);
         configuration.setMaxAge(3600L); // Cache preflight response for 1 hour
-        
+
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", configuration);
         return source;
