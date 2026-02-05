@@ -1,7 +1,9 @@
 package com.example.Authentication_System.Domain.repository.OutPutRepositoryPort;
 
 import com.example.Authentication_System.Domain.model.AuthResponse;
+import com.example.Authentication_System.Domain.model.AvatarUploadRequest;
 import com.example.Authentication_System.Domain.model.MfaSetupResponse;
+import com.example.Authentication_System.Domain.model.PasswordChangeRequest;
 import com.example.Authentication_System.Domain.model.ProfileUpdateRequest;
 import com.example.Authentication_System.Domain.model.User;
 import com.example.Authentication_System.Domain.model.UserProfile;
@@ -33,4 +35,10 @@ public interface UserUseCase {
     MfaSetupResponse setupMfa(UUID userId);
     void enableMfa(UUID userId, String code);
     Optional<AuthResponse> verifyMfa(String mfaToken, String code);
+
+    // Avatar
+    void updateAvatar(UUID userId, AvatarUploadRequest request, String ipAddress, String userAgent);
+
+    // Password Change
+    void changePassword(UUID userId, PasswordChangeRequest request, String ipAddress, String userAgent);
 }

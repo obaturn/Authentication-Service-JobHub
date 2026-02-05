@@ -180,4 +180,22 @@ public class AuthController {
                 .map(ResponseEntity::ok)
                 .orElseThrow(() -> new IllegalArgumentException("Invalid MFA token or code"));
     }
+
+    @PostMapping("/profile/avatar")
+    public ResponseEntity<Map<String, String>> uploadAvatar(@Valid @RequestBody AvatarUploadRequest avatarRequest, HttpServletRequest request) {
+        UUID userId = getCurrentUserId(request);
+        String ipAddress = getClientIp(request);
+        String userAgent = getUserAgent(request);
+        userUseCase.updateAvatar(userId, avatarRequest, ipAddress, userAgent);
+        return ResponseEntity.ok(Collections.singletonMap("message", "Avatar uploaded successfully"));
+    }
+
+    @PutMapping("/password")
+    public ResponseEntity<Map<String, String>> changePassword(@Valid @RequestBody PasswordChangeRequest passwordRequest, HttpServletRequest request) {
+        UUID userId = getCurrentUserId(request);
+        String ipAddress = getClientIp(request);
+        String userAgent = getUserAgent(request);
+        userUseCase.changePassword(userId, passwordRequest, ipAddress, userAgent);
+        return ResponseEntity.ok(Collections.singletonMap("message", "Password changed successfully"));
+    }
 }

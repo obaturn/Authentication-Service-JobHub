@@ -32,6 +32,8 @@ public class UserProfile {
 
     private String phone;
 
+    private Integer yearsOfExperience;
+
     private Instant createdAt;
 
     private Instant updatedAt;

@@ -1,5 +1,7 @@
 package com.example.Authentication_System.Domain.model;
 
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Size;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -28,4 +30,17 @@ public class ProfileUpdateRequest {
     private String bio;
 
     private String avatarUrl;
+
+    @Size(max = 200, message = "Headline must not exceed 200 characters")
+    private String headline;
+
+    @Size(max = 500, message = "Portfolio URL must not exceed 500 characters")
+    private String portfolioUrl;
+
+    @Size(max = 500, message = "Website URL must not exceed 500 characters")
+    private String websiteUrl;
+
+    @Min(value = 0, message = "Years of experience must be non-negative")
+    @Max(value = 50, message = "Years of experience must not exceed 50")
+    private Integer yearsOfExperience;
 }

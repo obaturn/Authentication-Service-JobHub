@@ -130,11 +130,12 @@ public class UserServiceImplementations implements UserUseCase {
 
         User savedUser = userRepository.save(newUser);
 
-        // Assign default "job_seeker" role
-        roleRepository.findByName("job_seeker").ifPresent(jobSeekerRole -> {
+        // Assign role based on userType
+        String userType = user.getUserType() != null ? user.getUserType() : "job_seeker";
+        roleRepository.findByName(userType).ifPresent(role -> {
             UserRole userRole = UserRole.builder()
                     .userId(savedUser.getId())
-                    .roleId(jobSeekerRole.getId())
+                    .roleId(role.getId())
                     .assignedAt(Instant.now())
                     .build();
             userRoleRepository.save(userRole);
@@ -625,5 +626,38 @@ public class UserServiceImplementations implements UserUseCase {
         } catch (JsonProcessingException e) {
             System.err.println("Failed to serialize event to outbox: " + e.getMessage());
         }
+    }
+
+    @Override
+    @Transactional
+    public void updateAvatar(UUID userId, AvatarUploadRequest request, String ipAddress, String userAgent) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new IllegalArgumentException("User not found"));
+        
+        user.setAvatarUrl(request.getAvatarUrl());
+        user.setUpdatedAt(Instant.now());
+        userRepository.save(user);
+        
+        auditService.logEvent(userId, "AVATAR_UPDATE", "User", userId, "Avatar updated", ipAddress, userAgent);
+    }
+
+    @Override
+    @Transactional
+    public void changePassword(UUID userId, PasswordChangeRequest request, String ipAddress, String userAgent) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new IllegalArgumentException("User not found"));
+        
+        if (!passwordEncoder.matches(request.getCurrentPassword(), user.getPasswordHash())) {
+            throw new IllegalArgumentException("Current password is incorrect");
+        }
+        
+        user.setPasswordHash(passwordEncoder.encode(request.getNewPassword()));
+        user.setUpdatedAt(Instant.now());
+        userRepository.save(user);
+        
+        // Revoke all refresh tokens for security
+        refreshTokenRepository.revokeAllTokensForUser(userId);
+        
+        auditService.logEvent(userId, "PASSWORD_CHANGE", "User", userId, "Password changed successfully", ipAddress, userAgent);
     }
 }
