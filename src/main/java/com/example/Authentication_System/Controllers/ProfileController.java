@@ -3,8 +3,10 @@ package com.example.Authentication_System.Controllers;
 import com.example.Authentication_System.Domain.model.*;
 import com.example.Authentication_System.Domain.repository.inputRepositoryPort.EducationRepository;
 import com.example.Authentication_System.Domain.repository.inputRepositoryPort.ExperienceRepository;
+import com.example.Authentication_System.Domain.repository.inputRepositoryPort.OutboxEventRepository;
 import com.example.Authentication_System.Domain.repository.inputRepositoryPort.SkillRepository;
 import com.example.Authentication_System.Security.JwtUtils;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import org.slf4j.Logger;
@@ -23,20 +25,27 @@ public class ProfileController {
 
     private static final Logger logger = LoggerFactory.getLogger(ProfileController.class);
     private static final String CORRELATION_ID_HEADER = "X-Correlation-ID";
+    private static final String PROFILE_CHANGES_TOPIC = "profile-changes";
 
     private final SkillRepository skillRepository;
     private final ExperienceRepository experienceRepository;
     private final EducationRepository educationRepository;
+    private final OutboxEventRepository outboxEventRepository;
     private final JwtUtils jwtUtils;
+    private final ObjectMapper objectMapper;
 
     public ProfileController(SkillRepository skillRepository,
                             ExperienceRepository experienceRepository,
                             EducationRepository educationRepository,
-                            JwtUtils jwtUtils) {
+                            OutboxEventRepository outboxEventRepository,
+                            JwtUtils jwtUtils,
+                            ObjectMapper objectMapper) {
         this.skillRepository = skillRepository;
         this.experienceRepository = experienceRepository;
         this.educationRepository = educationRepository;
+        this.outboxEventRepository = outboxEventRepository;
         this.jwtUtils = jwtUtils;
+        this.objectMapper = objectMapper;
     }
 
     private String getClientIp(HttpServletRequest request) {
@@ -83,6 +92,30 @@ public class ProfileController {
 
     private void clearMdc() {
         MDC.clear();
+    }
+
+    // ==================== Helper method to create outbox events ====================
+
+    private void createOutboxEvent(Object event) {
+        try {
+            String eventType = event.getClass().getSimpleName();
+            String payload = objectMapper.writeValueAsString(event);
+            
+            OutboxEvent outboxEvent = OutboxEvent.builder()
+                    .eventType(eventType)
+                    .payload(payload)
+                    .topic(PROFILE_CHANGES_TOPIC)
+                    .status("PENDING")
+                    .createdAt(Instant.now())
+                    .retryCount(0)
+                    .build();
+            
+            outboxEventRepository.save(outboxEvent);
+            logger.info("[KAFKA_OUTBOX] Event {} saved for publishing", eventType);
+        } catch (Exception e) {
+            logger.error("[KAFKA_OUTBOX] Failed to save event: {}", e.getMessage());
+            // Don't throw - we don't want to fail the main operation
+        }
     }
 
     // ==================== SKILLS CRUD ====================
@@ -140,6 +173,10 @@ public class ProfileController {
                     .build();
             Skill savedSkill = skillRepository.save(skill);
             
+            // Create Kafka event for skill added
+            SkillAddedEvent skillAddedEvent = SkillAddedEvent.fromSkill(savedSkill, userId, correlationId);
+            createOutboxEvent(skillAddedEvent);
+            
             logger.info("[SUCCESS] Skill created with id={}, name={}, category={}", 
                     savedSkill.getId(), savedSkill.getName(), savedSkill.getCategory());
             return ResponseEntity.ok(savedSkill);
@@ -183,6 +220,11 @@ public class ProfileController {
             skill.setUpdatedAt(Instant.now());
 
             Skill updatedSkill = skillRepository.save(skill);
+            
+            // Create Kafka event for skill updated
+            SkillUpdatedEvent skillUpdatedEvent = SkillUpdatedEvent.fromSkill(updatedSkill, userId, correlationId);
+            createOutboxEvent(skillUpdatedEvent);
+            
             logger.info("[SUCCESS] Skill updated: id={}, name={}", updatedSkill.getId(), updatedSkill.getName());
             return ResponseEntity.ok(updatedSkill);
         } catch (IllegalArgumentException e) {
@@ -216,8 +258,14 @@ public class ProfileController {
                 throw new IllegalArgumentException("Not authorized to delete this skill");
             }
 
+            String skillName = skill.getName();
             skillRepository.deleteById(skillId);
-            logger.info("[SUCCESS] Skill deleted: id={}, name={}", skillId, skill.getName());
+            
+            // Create Kafka event for skill deleted
+            SkillDeletedEvent skillDeletedEvent = SkillDeletedEvent.create(skillId, skillName, userId, correlationId);
+            createOutboxEvent(skillDeletedEvent);
+            
+            logger.info("[SUCCESS] Skill deleted: id={}, name={}", skillId, skillName);
             return ResponseEntity.noContent().build();
         } catch (IllegalArgumentException e) {
             logger.error("[ERROR] Failed to delete skill {}: {}", skillId, e.getMessage());
@@ -286,6 +334,10 @@ public class ProfileController {
                     .build();
             Experience savedExperience = experienceRepository.save(experience);
             
+            // Create Kafka event for experience added
+            ExperienceAddedEvent experienceAddedEvent = ExperienceAddedEvent.fromExperience(savedExperience, userId, correlationId);
+            createOutboxEvent(experienceAddedEvent);
+            
             logger.info("[SUCCESS] Experience created with id={}, company={}, title={}", 
                     savedExperience.getId(), savedExperience.getCompanyName(), savedExperience.getJobTitle());
             return ResponseEntity.ok(savedExperience);
@@ -334,6 +386,11 @@ public class ProfileController {
             experience.setUpdatedAt(Instant.now());
 
             Experience updatedExperience = experienceRepository.save(experience);
+            
+            // Create Kafka event for experience updated
+            ExperienceUpdatedEvent experienceUpdatedEvent = ExperienceUpdatedEvent.fromExperience(updatedExperience, userId, correlationId);
+            createOutboxEvent(experienceUpdatedEvent);
+            
             logger.info("[SUCCESS] Experience updated: id={}, company={}, title={}", 
                     updatedExperience.getId(), updatedExperience.getCompanyName(), updatedExperience.getJobTitle());
             return ResponseEntity.ok(updatedExperience);
@@ -368,8 +425,15 @@ public class ProfileController {
                 throw new IllegalArgumentException("Not authorized to delete this experience");
             }
 
+            String jobTitle = experience.getJobTitle();
+            String companyName = experience.getCompanyName();
             experienceRepository.deleteById(experienceId);
-            logger.info("[SUCCESS] Experience deleted: id={}, company={}", experienceId, experience.getCompanyName());
+            
+            // Create Kafka event for experience deleted
+            ExperienceDeletedEvent experienceDeletedEvent = ExperienceDeletedEvent.create(experienceId, jobTitle, companyName, userId, correlationId);
+            createOutboxEvent(experienceDeletedEvent);
+            
+            logger.info("[SUCCESS] Experience deleted: id={}, company={}", experienceId, companyName);
             return ResponseEntity.noContent().build();
         } catch (IllegalArgumentException e) {
             logger.error("[ERROR] Failed to delete experience {}: {}", experienceId, e.getMessage());
@@ -439,6 +503,10 @@ public class ProfileController {
                     .build();
             Education savedEducation = educationRepository.save(education);
             
+            // Create Kafka event for education added
+            EducationAddedEvent educationAddedEvent = EducationAddedEvent.fromEducation(savedEducation, userId, correlationId);
+            createOutboxEvent(educationAddedEvent);
+            
             logger.info("[SUCCESS] Education created with id={}, institution={}, degree={}", 
                     savedEducation.getId(), savedEducation.getInstitutionName(), savedEducation.getDegree());
             return ResponseEntity.ok(savedEducation);
@@ -488,6 +556,11 @@ public class ProfileController {
             education.setUpdatedAt(Instant.now());
 
             Education updatedEducation = educationRepository.save(education);
+            
+            // Create Kafka event for education updated
+            EducationUpdatedEvent educationUpdatedEvent = EducationUpdatedEvent.fromEducation(updatedEducation, userId, correlationId);
+            createOutboxEvent(educationUpdatedEvent);
+            
             logger.info("[SUCCESS] Education updated: id={}, institution={}, degree={}", 
                     updatedEducation.getId(), updatedEducation.getInstitutionName(), updatedEducation.getDegree());
             return ResponseEntity.ok(updatedEducation);
@@ -522,8 +595,16 @@ public class ProfileController {
                 throw new IllegalArgumentException("Not authorized to delete this education");
             }
 
+            String degree = education.getDegree();
+            String fieldOfStudy = education.getFieldOfStudy();
+            String institutionName = education.getInstitutionName();
             educationRepository.deleteById(educationId);
-            logger.info("[SUCCESS] Education deleted: id={}, institution={}", educationId, education.getInstitutionName());
+            
+            // Create Kafka event for education deleted
+            EducationDeletedEvent educationDeletedEvent = EducationDeletedEvent.create(educationId, degree, fieldOfStudy, institutionName, userId, correlationId);
+            createOutboxEvent(educationDeletedEvent);
+            
+            logger.info("[SUCCESS] Education deleted: id={}, institution={}", educationId, institutionName);
             return ResponseEntity.noContent().build();
         } catch (IllegalArgumentException e) {
             logger.error("[ERROR] Failed to delete education {}: {}", educationId, e.getMessage());
