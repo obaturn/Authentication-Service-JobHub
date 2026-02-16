@@ -288,11 +288,19 @@ public class UserServiceImplementations implements UserUseCase {
             user.setUserProfile(userProfile);
         }
         
-        userProfile.setAvatarUrl(request.getAvatarUrl() != null ? request.getAvatarUrl() : userProfile.getAvatarUrl());
+        // Sync avatarUrl bidirectionally between User and UserProfile
+        if (request.getAvatarUrl() != null) {
+            user.setAvatarUrl(request.getAvatarUrl());
+            userProfile.setAvatarUrl(request.getAvatarUrl());
+        } else if (user.getAvatarUrl() != null) {
+            userProfile.setAvatarUrl(user.getAvatarUrl());
+        }
+        
         userProfile.setPhone(request.getPhone() != null ? request.getPhone() : userProfile.getPhone());
         userProfile.setLocation(request.getLocation() != null ? request.getLocation() : userProfile.getLocation());
         userProfile.setBio(request.getBio() != null ? request.getBio() : userProfile.getBio());
 
+        user.setUpdatedAt(Instant.now());
         userRepository.save(user);
 
         auditService.logEvent(user.getId(), "PROFILE_UPDATE", "User", user.getId(), "User profile updated", ipAddress, userAgent);
@@ -392,7 +400,17 @@ public class UserServiceImplementations implements UserUseCase {
 
     @Override
     public Optional<UserProfile> getProfile(UUID userId) {
-        return userRepository.findById(userId).map(User::getUserProfile);
+        return userRepository.findById(userId).map(user -> {
+            UserProfile profile = user.getUserProfile();
+            if (profile == null) {
+                profile = UserProfile.builder().build();
+            }
+            // Use User.avatarUrl as the source of truth for avatar
+            if (user.getAvatarUrl() != null) {
+                profile.setAvatarUrl(user.getAvatarUrl());
+            }
+            return profile;
+        });
     }
 
     @Override
@@ -550,7 +568,15 @@ public class UserServiceImplementations implements UserUseCase {
 
         String secret = mfaService.generateNewSecret();
         String qrCode = mfaService.generateQrCodeImageUri(secret, user.getEmail(), "JobHub");
-
+        
+        // Generate the URI for debugging
+        String qrUri = String.format("otpauth://totp/JobHub:%s?secret=%s&issuer=JobHub&algorithm=SHA1&digits=6&period=30",
+                user.getEmail(), secret);
+        
+        logger.info("[MFA_SETUP] QR URI: {}", qrUri);
+        logger.info("[MFA_SETUP] Plain secret: {}", secret);
+        logger.info("[MFA_SETUP] Encrypted secret length: {}", cryptoUtils.encrypt(secret).length());
+        
         user.setMfaSecret(cryptoUtils.encrypt(secret));
         userRepository.save(user);
 
@@ -560,15 +586,31 @@ public class UserServiceImplementations implements UserUseCase {
     @Override
     @Transactional
     public void enableMfa(UUID userId, String code) {
+        logger.info("[MFA] Attempting to enable MFA for userId={}", userId);
+        
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new IllegalArgumentException("User not found"));
 
-        if (!mfaService.isOtpValid(user.getMfaSecret(), code)) {
+        // Get the encrypted secret
+        String encryptedSecret = user.getMfaSecret();
+        logger.info("[MFA] Encrypted secret (length): {}", encryptedSecret != null ? encryptedSecret.length() : 0);
+        
+        // Decrypt the MFA secret before verifying
+        String decryptedSecret = cryptoUtils.decrypt(user.getMfaSecret());
+        logger.info("[MFA] Decrypted secret (length): {}", decryptedSecret != null ? decryptedSecret.length() : 0);
+        logger.info("[MFA] Decrypted secret (full): {}", decryptedSecret);
+        
+        boolean isValid = mfaService.isOtpValid(decryptedSecret, code);
+        logger.info("[MFA] OTP validation result for userId={}: {}", userId, isValid);
+        
+        if (!isValid) {
+            logger.error("[MFA] Invalid MFA code for userId={}. Code provided: {}", userId, code);
             throw new IllegalArgumentException("Invalid MFA code");
         }
 
         user.setMfaEnabled(true);
         userRepository.save(user);
+        logger.info("[MFA] MFA enabled successfully for userId={}", userId);
     }
 
     @Override
@@ -634,7 +676,17 @@ public class UserServiceImplementations implements UserUseCase {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new IllegalArgumentException("User not found"));
         
+        // Update User.avatarUrl
         user.setAvatarUrl(request.getAvatarUrl());
+        
+        // Also sync to UserProfile to ensure consistency
+        UserProfile userProfile = user.getUserProfile();
+        if (userProfile == null) {
+            userProfile = UserProfile.builder().build();
+            user.setUserProfile(userProfile);
+        }
+        userProfile.setAvatarUrl(request.getAvatarUrl());
+        
         user.setUpdatedAt(Instant.now());
         userRepository.save(user);
         
